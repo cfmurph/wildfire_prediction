@@ -1,0 +1,34 @@
+# xAI Grok configuration for decision-support layer
+grok:
+  base_url: "https://api.x.ai/v1"
+  model: "grok-3"                  # grok-3-mini for faster / cheaper drafts
+  max_tokens: 2048
+  temperature: 0.2                 # low temperature for factual situation reports
+  timeout_seconds: 30
+
+prompts:
+  situation_report: prompts/situation_report.txt
+  evacuation_reasoning: prompts/evacuation_reasoning.txt
+
+# Fields expected in the structured JSON payload sent to Grok
+payload_schema:
+  fire_id: str
+  province: str
+  as_of_datetime: str              # ISO-8601
+  current_area_ha: float
+  spread_probabilities:            # pixel-level summary → zone-level stats
+    p25_area_ha: float
+    p50_area_ha: float
+    p75_area_ha: float
+  fwi_summary:
+    FWI: float
+    ISI: float
+    BUI: float
+  wind_summary:
+    speed_kmh: float
+    direction_deg: float
+  high_risk_zones:                 # list of named zones at risk
+    - name: str
+      burn_probability: float
+      population: int
+      road_access: str             # "open" | "limited" | "none"

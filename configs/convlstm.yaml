@@ -1,0 +1,58 @@
+# @package _global_
+defaults:
+  - _self_
+
+model:
+  name: convlstm
+  in_channels: 18
+  hidden_channels: [64, 64]   # two ConvLSTM layers
+  kernel_size: 3
+  dropout: 0.2
+
+data:
+  province: BC
+  patch_size: 64
+  seq_len: 5                  # T=5 days of history fed to ConvLSTM
+  channels:
+    - elevation
+    - slope
+    - aspect
+    - wind_dir
+    - wind_speed
+    - temp_min
+    - temp_max
+    - humidity
+    - precip
+    - FFMC
+    - DMC
+    - DC
+    - ISI
+    - BUI
+    - FWI
+    - NDVI
+    - landcover
+    - PrevFireMask
+  train_years: [2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020]
+  val_years: [2021, 2022]
+  test_years: [2023]
+  patches_dir: data/processed/patches
+  splits_dir: data/processed/splits
+  stats_dir: data/processed/stats
+
+training:
+  epochs: 60
+  batch_size: 16              # smaller batch; sequences are memory-heavy
+  learning_rate: 2.0e-4
+  weight_decay: 1.0e-4
+  scheduler: cosine
+  dice_weight: 0.5
+  early_stopping_patience: 10
+  num_workers: 4
+  seed: 42
+
+ablation:
+  seq_lens: [1, 3, 5]         # sweep over these in ablation study
+
+mlflow:
+  experiment_name: wildfire-phase1
+  tracking_uri: experiments/mlruns

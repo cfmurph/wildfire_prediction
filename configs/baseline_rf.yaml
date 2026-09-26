@@ -1,0 +1,53 @@
+# @package _global_
+defaults:
+  - _self_
+
+model:
+  name: baseline_rf
+  n_estimators: 500
+  max_depth: null          # unlimited
+  min_samples_leaf: 4
+  class_weight: balanced
+  n_jobs: -1
+  random_state: 42
+
+data:
+  province: BC
+  patch_size: 64
+  # FWI source: "zenodo" (ERA5-HRS, 2012-2018) or "cwfis" (operational, 2019+)
+  fwi_source: zenodo
+  channels:
+    - elevation
+    - slope
+    - aspect
+    - wind_dir
+    - wind_speed
+    - temp_min
+    - temp_max
+    - humidity
+    - precip
+    - FFMC
+    - DMC
+    - DC
+    - ISI
+    - BUI
+    - FWI
+    - NDVI
+    - landcover
+    - PrevFireMask
+    # Optional physics-informed feature (Phase 2):
+    # - burnp3_burn_prob  # BurnP3+ simulated burn probability
+  train_years: [2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020]
+  val_years: [2021, 2022]
+  test_years: [2023]
+  patches_dir: data/processed/patches
+  splits_dir: data/processed/splits
+  stats_dir: data/processed/stats
+
+training:
+  max_samples_per_split: 200000   # subsample to fit in RAM for RF
+  random_state: 42
+
+mlflow:
+  experiment_name: wildfire-phase1
+  tracking_uri: experiments/mlruns
