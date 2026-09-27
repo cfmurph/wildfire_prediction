@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect } from "react";
-import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
+import HotspotLayer from "@/components/layers/HotspotLayer";
+import WeatherLayer from "@/components/layers/WeatherLayer";
+import type { LayerId } from "@/lib/views";
 import type { HotspotCluster, WeatherStation } from "@/lib/types";
-import { formatCoord, formatFrp, frpColor, fwiColor, satelliteLabel } from "@/lib/format";
 import "leaflet/dist/leaflet.css";
 
 type FireMapProps = {
+  activeLayers: readonly LayerId[];
   clusters: HotspotCluster[];
   stations: WeatherStation[];
   showStations: boolean;
@@ -24,11 +27,11 @@ function FitClusters({ clusters }: { clusters: HotspotCluster[] }) {
       map.setView([54.5, -125.5], 5);
       return;
     }
-    const bounds = L.latLngBounds(clusters.map((cluster) => [cluster.latitude, cluster.longitude]));
+    const bounds = L.latLngBounds(
+      clusters.map((cluster) => [cluster.latitude, cluster.longitude] as [number, number]),
+    );
     map.fitBounds(bounds.pad(0.35), { maxZoom: 7 });
-    // signature captures cluster identity without refitting on unrelated renders
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, map]);
+  }, [signature, map, clusters]);
 
   return null;
 }
@@ -53,18 +56,18 @@ function FlyToSelected({
   return null;
 }
 
-function markerRadius(count: number): number {
-  return Math.min(28, 7 + Math.sqrt(count) * 3);
-}
-
 export default function FireMap({
+  activeLayers,
   clusters,
   stations,
   showStations,
   selectedId,
   onSelect,
 }: FireMapProps) {
-  const selected = clusters.find((cluster) => cluster.id === selectedId) ?? null;
+  const showHotspots = activeLayers.includes("hotspots");
+  const showWeather = activeLayers.includes("fire-weather") && showStations;
+  const visibleClusters = showHotspots ? clusters : [];
+  const selected = visibleClusters.find((cluster) => cluster.id === selectedId) ?? null;
 
   return (
     <MapContainer
@@ -84,57 +87,16 @@ export default function FireMap({
         attribution='Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
         url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
       />
-      <FitClusters clusters={clusters} />
+      <FitClusters clusters={visibleClusters} />
       <FlyToSelected
         token={selected?.id ?? ""}
         latitude={selected?.latitude ?? null}
         longitude={selected?.longitude ?? null}
       />
-      {showStations
-        ? stations.map((station) => (
-            <CircleMarker
-              key={`wx-${station.id}`}
-              center={[station.latitude, station.longitude]}
-              radius={4}
-              pathOptions={{
-                color: fwiColor(station.fwi),
-                weight: 1,
-                fillColor: fwiColor(station.fwi),
-                fillOpacity: 0.75,
-              }}
-            >
-              <Tooltip>
-                {station.name} · FWI {station.fwi ?? "n/a"}
-              </Tooltip>
-            </CircleMarker>
-          ))
-        : null}
-      {clusters.map((cluster) => {
-        const active = cluster.id === selectedId;
-        const color = frpColor(cluster.max_frp);
-        return (
-          <CircleMarker
-            key={cluster.id}
-            center={[cluster.latitude, cluster.longitude]}
-            radius={markerRadius(cluster.hotspot_count)}
-            eventHandlers={{ click: () => onSelect(cluster.id) }}
-            pathOptions={{
-              color: active ? "#f6f1e7" : color,
-              weight: active ? 3 : 1,
-              fillColor: color,
-              fillOpacity: 0.88,
-            }}
-          >
-            <Tooltip>
-              {formatCoord(cluster.latitude, cluster.longitude)}
-              <br />
-              {cluster.hotspot_count} detections · max FRP {formatFrp(cluster.max_frp)}
-              <br />
-              {cluster.satellites.map(satelliteLabel).join(", ") || "VIIRS"}
-            </Tooltip>
-          </CircleMarker>
-        );
-      })}
+      {showWeather ? <WeatherLayer stations={stations} /> : null}
+      {showHotspots ? (
+        <HotspotLayer clusters={visibleClusters} selectedId={selectedId} onSelect={onSelect} />
+      ) : null}
     </MapContainer>
   );
 }

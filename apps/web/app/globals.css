@@ -71,6 +71,54 @@ button, input { font: inherit; }
 
 .tag { margin: 0.15rem 0 0; color: #c8c2b4; font-size: 0.82rem; }
 
+.view-switcher {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.45rem 0.75rem;
+  background: #161b13;
+  border-bottom: 1px solid #2a3124;
+  overflow-x: auto;
+}
+
+.view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #3a4234;
+  background: transparent;
+  color: #d9d3c6;
+  border-radius: 999px;
+  padding: 0.38rem 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.view-tab[aria-selected="true"] {
+  background: #f3ecdf;
+  color: #221e19;
+  border-color: #f3ecdf;
+}
+
+.view-tab:focus-visible {
+  outline: 2px solid #f3ecdf;
+  outline-offset: 2px;
+}
+
+.soon-badge {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #e6c07b;
+  background: #2a2118;
+  border-radius: 999px;
+  padding: 0.08rem 0.38rem;
+}
+
+.view-tab[aria-selected="true"] .soon-badge {
+  background: #f4e0c8;
+  color: #8a4b12;
+}
+
 .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; justify-content: flex-end; }
 
 .chip, .reload {

@@ -1,17 +1,15 @@
-"""FastAPI app: BC hotspot map data and Grok situation reports."""
+"""FastAPI app: one map, four views. Only the current-wildfire view is implemented."""
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.firms import FirmsConfigError, FirmsUpstreamError, load_hotspots
-from app.reporting import MissingGrokKey, ReportFailed, UnknownCluster, generate_report
-from app.schemas import ReportRequest
-from app.weather import load_weather
+from app.routers import current, history, predict, risk
+from app.routers.planned import PLANNED_VIEWS
 
 logging.basicConfig(level=logging.INFO)
 # httpx logs full request URLs at INFO, which would include the FIRMS map key.
@@ -21,7 +19,10 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 app = FastAPI(
     title="BC Wildfire Watch",
     version="0.1.0",
-    summary="Near-real-time VIIRS hotspots in British Columbia and Grok situation reports.",
+    summary=(
+        "British Columbia wildfire map. Current hotspots are live; "
+        "history, risk, and spread are planned."
+    ),
 )
 
 _settings = get_settings()
@@ -33,6 +34,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(current.router)
+app.include_router(history.router)
+app.include_router(risk.router)
+app.include_router(predict.router)
+
 
 @app.get("/health")
 def health() -> dict:
@@ -42,31 +48,11 @@ def health() -> dict:
         "region": "BC",
         "firms_configured": bool(settings.firms_map_key),
         "grok_configured": bool(settings.xai_api_key),
+        "views": {
+            "history": "coming_soon",
+            "risk": "coming_soon",
+            "current": "available",
+            "predict": "coming_soon",
+        },
+        "planned": PLANNED_VIEWS,
     }
-
-
-@app.get("/hotspots")
-def hotspots() -> dict:
-    try:
-        return load_hotspots()
-    except FirmsConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except FirmsUpstreamError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@app.get("/weather")
-def weather() -> dict:
-    return load_weather()
-
-
-@app.post("/report")
-def report(body: ReportRequest) -> dict:
-    try:
-        return generate_report(body.cluster.model_dump())
-    except MissingGrokKey as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except UnknownCluster as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ReportFailed as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc

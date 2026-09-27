@@ -80,6 +80,23 @@ def test_health_reports_key_presence_without_leaking_secrets(client, monkeypatch
     assert "super-secret-firms" not in response.text
 
 
+def test_planned_views_are_not_implemented(client):
+    health = client.get("/health").json()["views"]
+    assert health == {
+        "history": "coming_soon",
+        "risk": "coming_soon",
+        "current": "available",
+        "predict": "coming_soon",
+    }
+    for path, view in (("/history", "history"), ("/risk", "risk"), ("/predict", "predict")):
+        response = client.get(path)
+        assert response.status_code == 501
+        body = response.json()
+        assert body["view"] == view
+        assert body["status"] == "coming_soon"
+        assert body["detail"]
+
+
 def test_hotspots_missing_key(client):
     response = client.get("/hotspots")
     assert response.status_code == 503

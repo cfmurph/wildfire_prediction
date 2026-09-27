@@ -77,7 +77,7 @@ The package build backend is `setuptools.build_meta`. `pip install -e .` install
 
 ## Web app (Milestone 1)
 
-Public map of near-real-time VIIRS hotspots in British Columbia, CWFIS fire-weather stations, and an on-demand Grok situation report. No trained spread model is required. Spread probabilities are left unset on purpose, and the live prompt tells Grok not to invent a forecast.
+The map has four views. Only **Current** is live in this release: near-real-time VIIRS hotspots in British Columbia, CWFIS fire-weather stations, and an on-demand Grok situation report. History (2012–2023, time slider), Long-term risk (burn likelihood), and Short-term (next-day spread) are tabs marked “Soon”. The API reserves `GET /history`, `GET /risk`, and `GET /predict` (HTTP 501) so those views can be added in their own routers. No trained spread model is required. Spread probabilities are left unset on purpose, and the live prompt tells Grok not to invent a forecast.
 
 ### Run locally
 

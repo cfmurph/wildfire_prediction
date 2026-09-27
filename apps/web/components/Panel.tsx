@@ -65,7 +65,7 @@ export default function Panel({
   const reportDisabled = !selected || activeReport?.loading === true || (grokKnown && !grokReady);
 
   return (
-    <aside className="panel" id="clusters">
+    <aside className="panel" id="map-panel" aria-labelledby="view-tab-current">
       <div className="panel-block">
         <p className="eyebrow">British Columbia</p>
         <h2>Hotspot clusters</h2>
