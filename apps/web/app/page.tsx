@@ -1,188 +1,66 @@
 "use client";
 
+import { useState } from "react";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
-import ComingSoon from "@/components/ComingSoon";
-import Panel, { type ReportState } from "@/components/Panel";
-import ViewSwitcher from "@/components/ViewSwitcher";
-import { ApiError, apiBase, getHealth, getHotspots, getWeather, postReport } from "@/lib/api";
-import type { HealthResponse, HotspotsResponse, WeatherResponse } from "@/lib/types";
-import { DEFAULT_VIEW, activeLayers, viewById, type ViewId } from "@/lib/views";
+import ViewSwitcher, { View } from "@/components/ViewSwitcher";
+import FirePanel from "@/components/FirePanel";
+import Header from "@/components/Header";
 
-function MapFallback() {
-  return <div className="map-fallback">Loading map…</div>;
-}
-
-const FireMap = dynamic(() => import("@/components/FireMap"), {
+// MapLibre needs to be client-side only (no SSR)
+const WildfireMap = dynamic(() => import("@/components/WildfireMap"), {
   ssr: false,
-  loading: () => <MapFallback />,
+  loading: () => (
+    <div className="flex-1 flex items-center justify-center bg-gray-900">
+      <div className="text-gray-400">Loading map…</div>
+    </div>
+  ),
 });
 
-type HotspotStatus = "loading" | "ready" | "missing-key" | "error";
+export type SelectedFire = {
+  fire_id: string;
+  fire_name?: string;
+  lat: number;
+  lon: number;
+  size_ha: number;
+  fwi?: number;
+  isi?: number;
+  wind_speed_ms?: number;
+  wind_dir_deg?: number;
+  source: "active" | "hotspot" | "history";
+  properties: Record<string, unknown>;
+};
 
-export default function HomePage() {
-  const requestId = useRef(0);
-  const reportRequest = useRef(0);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [hotspots, setHotspots] = useState<HotspotsResponse | null>(null);
-  const [hotspotStatus, setHotspotStatus] = useState<HotspotStatus>("loading");
-  const [hotspotMessage, setHotspotMessage] = useState<string | null>(null);
-  const [weather, setWeather] = useState<WeatherResponse | null>(null);
-  const [weatherNote, setWeatherNote] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showStations, setShowStations] = useState(false);
-  const [report, setReport] = useState<ReportState | null>(null);
-  const [viewId, setViewId] = useState<ViewId>(DEFAULT_VIEW);
-  const view = viewById(viewId);
-  const layers = activeLayers(view);
-
-  const load = useCallback(() => {
-    const id = requestId.current + 1;
-    requestId.current = id;
-    setHotspotStatus("loading");
-    setHotspotMessage(null);
-    setHealth(null);
-    setWeather(null);
-    setWeatherNote(null);
-
-    getHealth()
-      .then((data) => {
-        if (requestId.current === id) setHealth(data);
-      })
-      .catch(() => {
-        if (requestId.current === id) setHealth(null);
-      });
-
-    getHotspots()
-      .then((data) => {
-        if (requestId.current !== id) return;
-        setHotspots(data);
-        setHotspotStatus("ready");
-        setSelectedId((current) => {
-          if (current && data.clusters.some((cluster) => cluster.id === current)) return current;
-          return null;
-        });
-      })
-      .catch((error: unknown) => {
-        if (requestId.current !== id) return;
-        const message =
-          error instanceof ApiError
-            ? error.message
-            : `Cannot reach the API at ${apiBase()}. Start the API and set NEXT_PUBLIC_API_URL.`;
-        const missingKey =
-          error instanceof ApiError && error.status === 503 && message.includes("FIRMS_MAP_KEY");
-        setHotspots(null);
-        setHotspotStatus(missingKey ? "missing-key" : "error");
-        setHotspotMessage(message);
-        setSelectedId(null);
-      });
-
-    getWeather()
-      .then((data) => {
-        if (requestId.current === id) setWeather(data);
-      })
-      .catch(() => {
-        if (requestId.current === id) {
-          setWeatherNote("Fire weather could not be loaded from the API.");
-        }
-      });
-  }, []);
-
-  useEffect(() => {
-    load();
-    return () => {
-      requestId.current += 1;
-    };
-  }, [load]);
-
-  const selected = hotspots?.clusters.find((cluster) => cluster.id === selectedId) ?? null;
-
-  async function onGenerate() {
-    if (!selected) return;
-    const cluster = selected;
-    const token = reportRequest.current + 1;
-    reportRequest.current = token;
-    setReport({ clusterId: cluster.id, loading: true });
-    try {
-      const result = await postReport(cluster);
-      if (reportRequest.current !== token) return;
-      setReport({ clusterId: cluster.id, loading: false, text: result.report, result });
-    } catch (error: unknown) {
-      if (reportRequest.current !== token) return;
-      const message =
-        error instanceof ApiError ? error.message : "Could not generate a situation report.";
-      setReport({ clusterId: cluster.id, loading: false, error: message });
-    }
-  }
-
-  const overlay =
-    view.available && (hotspotStatus === "missing-key" || hotspotStatus === "error") ? (
-      <div className={`map-overlay ${hotspotStatus === "error" ? "is-error" : ""}`} role="status">
-        <p>{hotspotStatus === "missing-key" ? "Waiting on a FIRMS map key" : "Map data unavailable"}</p>
-      </div>
-    ) : null;
+export default function Home() {
+  const [view, setView] = useState<View>("current");
+  const [historyYear, setHistoryYear] = useState(2023);
+  const [selectedFire, setSelectedFire] = useState<SelectedFire | null>(null);
 
   return (
-    <div className="app">
-      <a className="skip" href="#map-panel">
-        Skip to map panel
-      </a>
-      <header className="topbar">
-        <div className="brand">
-          <span className="ember" aria-hidden="true" />
-          <div>
-            <p className="wordmark">BC Wildfire Watch</p>
-            <p className="tag">{view.summary}</p>
+    <div className="flex flex-col h-screen overflow-hidden">
+      <Header />
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <aside className="w-80 bg-gray-900 border-r border-gray-800 flex flex-col">
+          <ViewSwitcher
+            current={view}
+            onChange={setView}
+            historyYear={historyYear}
+            onYearChange={setHistoryYear}
+          />
+          <div className="flex-1 overflow-y-auto sidebar-scroll">
+            <FirePanel fire={selectedFire} view={view} />
           </div>
-        </div>
-        <div className="chips">
-          <span className={health ? "chip ok" : "chip"}>
-            API {health ? "connected" : hotspotStatus === "loading" ? "checking" : "unreachable"}
-          </span>
-          <span className={health?.firms_configured ? "chip ok" : health ? "chip warn" : "chip"}>
-            FIRMS {health ? (health.firms_configured ? "key set" : "key missing") : "checking"}
-          </span>
-          <span className={health?.grok_configured ? "chip ok" : health ? "chip warn" : "chip"}>
-            Grok {health ? (health.grok_configured ? "key set" : "key missing") : "checking"}
-          </span>
-          <button type="button" className="reload" onClick={load}>
-            Reload
-          </button>
-        </div>
-      </header>
-      <ViewSwitcher active={viewId} onChange={setViewId} />
-      <div className="workspace">
-        <div className="map-wrap">
-          <FireMap
-            activeLayers={layers}
-            clusters={hotspots?.clusters ?? []}
-            stations={weather?.stations ?? []}
-            showStations={showStations}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
+        </aside>
+
+        {/* Map */}
+        <main className="flex-1 relative">
+          <WildfireMap
+            view={view}
+            historyYear={historyYear}
+            onFireSelect={setSelectedFire}
+            selectedFire={selectedFire}
           />
-          {overlay}
-        </div>
-        {view.available ? (
-          <Panel
-            hotspotStatus={hotspotStatus}
-            hotspotMessage={hotspotMessage}
-            hotspots={hotspots}
-            weather={weather}
-            weatherNote={weatherNote}
-            health={health}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            showStations={showStations}
-            onToggleStations={setShowStations}
-            report={report}
-            onGenerate={() => {
-              void onGenerate();
-            }}
-          />
-        ) : (
-          <ComingSoon view={view} />
-        )}
+        </main>
       </div>
     </div>
   );

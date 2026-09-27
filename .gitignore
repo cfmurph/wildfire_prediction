@@ -59,3 +59,5 @@ logs/
 *.pt
 *.pth
 *.ckpt
+node_modules/
+apps/web/.next/

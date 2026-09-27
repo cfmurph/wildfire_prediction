@@ -103,11 +103,20 @@ def _download_file(url: str, dest: Path, desc: str = "", chunk_size: int = 8192)
 
 
 def _zenodo_files(doi: str) -> list[dict]:
-    """Return file metadata list for a Zenodo record identified by its DOI."""
-    record_id = doi.split("/")[-1]
+    """
+    Return file metadata list for a Zenodo record identified by its DOI.
+
+    DOI format: "10.5281/zenodo.3540922"
+    Record ID (numeric only): "3540922"
+    API URL: https://zenodo.org/api/records/3540922
+    """
+    # Extract numeric record ID from DOI (strip "zenodo." prefix if present)
+    raw_id = doi.split("/")[-1]                    # e.g. "zenodo.3540922"
+    record_id = raw_id.replace("zenodo.", "")      # e.g. "3540922"
     resp = requests.get(f"{ZENODO_API}/{record_id}", timeout=30)
     resp.raise_for_status()
     data = resp.json()
+    # Zenodo API v2 returns files under "files" key; each has "key" and "links.self"
     return data.get("files", [])
 
 
@@ -121,43 +130,72 @@ def download_bc_perimeters(dest_dir: Path) -> None:
 
     Source: BC Wildfire Service — Historical Fire Perimeters
     URL:    https://catalogue.data.gov.bc.ca/dataset/fire-perimeters-historical
-    Format: GeoJSON (WGS84) or Shapefile
+    Format: Zipped Shapefile (then converted to GeoJSON for portability)
     License: Open Government Licence – BC
+
+    Uses the BC Data Catalogue direct download URL which is more reliable
+    than the WFS endpoint for large datasets.
     """
     log.info("=== BC Fire Perimeters ===")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Direct GeoJSON download via BC Data Catalogue BCGW
-    # The WFS endpoint returns all historical perimeters
-    base_url = (
-        "https://openmaps.gov.bc.ca/geo/pub/WHSE_LAND_AND_NATURAL_RESOURCE"
-        ".PROT_HISTORICAL_FIRE_POLYS_SP/ows"
-    )
-    params = {
-        "service": "WFS",
-        "version": "2.0.0",
-        "request": "GetFeature",
-        "typeName": "WHSE_LAND_AND_NATURAL_RESOURCE:PROT_HISTORICAL_FIRE_POLYS_SP",
-        "outputFormat": "application/json",
-        "srsName": "EPSG:4326",
-    }
+    out_zip = dest_dir / "prot_historical_fire_polys.zip"
+    out_geojson = dest_dir / "bc_fire_perimeters_historical.geojson"
 
-    param_str = "&".join(f"{k}={v}" for k, v in params.items())
-    url = f"{base_url}?{param_str}"
-    out = dest_dir / "bc_fire_perimeters_historical.geojson"
-
-    if out.exists():
-        log.info(f"  already exists: {out.name}")
+    if out_geojson.exists():
+        log.info(f"  already exists: {out_geojson.name}")
         return
 
-    log.info(f"  Downloading BC perimeters (this may be large)…")
-    try:
-        _download_file(url, out, "BC fire perimeters")
-        log.info(f"  Saved → {out}")
-    except Exception as exc:
-        log.error(f"  BC perimeters download failed: {exc}")
-        log.info("  Fallback: download manually from https://catalogue.data.gov.bc.ca/"
-                 "dataset/fire-perimeters-historical and place in data/raw/bc_perimeters/")
+    # BC Data Catalogue direct shapefile download (stable URL via pub.data.gov.bc.ca)
+    urls_to_try = [
+        "https://pub.data.gov.bc.ca/datasets/cdfc2d7b-c046-4bf0-90ac-4897232619e9/prot_historical_fire_polys.zip",
+        # Fallback: BCGW WFS with correct URL-encoded typeName
+        (
+            "https://openmaps.gov.bc.ca/geo/pub/wfs?"
+            "service=WFS&version=2.0.0&request=GetFeature"
+            "&typeName=WHSE_LAND_AND_NATURAL_RESOURCE.PROT_HISTORICAL_FIRE_POLYS_SP"
+            "&outputFormat=application%2Fjson&srsName=EPSG%3A4326"
+            "&count=100000"
+        ),
+    ]
+
+    log.info("  Downloading BC perimeters (this may be large — up to ~500 MB)…")
+    for url in urls_to_try:
+        try:
+            if url.endswith(".zip"):
+                _download_file(url, out_zip, "BC fire perimeters (zip)")
+                import zipfile
+                with zipfile.ZipFile(out_zip, "r") as z:
+                    z.extractall(dest_dir)
+                out_zip.unlink(missing_ok=True)
+                # Convert SHP → GeoJSON
+                import subprocess
+                shps = list(dest_dir.glob("*.shp"))
+                if shps:
+                    result = subprocess.run(
+                        ["ogr2ogr", "-f", "GeoJSON", "-t_srs", "EPSG:4326",
+                         str(out_geojson), str(shps[0])],
+                        capture_output=True, text=True,
+                    )
+                    if result.returncode == 0:
+                        log.info(f"  Saved → {out_geojson}")
+                        return
+                    else:
+                        log.warning(f"  ogr2ogr failed: {result.stderr.strip()}")
+                        log.info("  Shapefile extracted — use as-is from data/raw/bc_perimeters/")
+                        return
+            else:
+                _download_file(url, out_geojson, "BC fire perimeters (GeoJSON)")
+                log.info(f"  Saved → {out_geojson}")
+                return
+        except Exception as exc:
+            log.warning(f"  URL failed: {exc}")
+
+    log.error("  All BC perimeter download attempts failed.")
+    log.info(
+        "  Manual download: https://catalogue.data.gov.bc.ca/dataset/fire-perimeters-historical\n"
+        "  → click 'Download' → place the zip in data/raw/bc_perimeters/ and unzip."
+    )
 
 
 # ---------------------------------------------------------------------------
