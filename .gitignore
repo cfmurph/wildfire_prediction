@@ -8,6 +8,8 @@ __pycache__/
 dist/
 build/
 .eggs/
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv/
@@ -30,8 +32,15 @@ experiments/artifacts/
 # Environment / secrets
 .env
 .env.*
+!.env.example
 *.key
 cdsapirc
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.vercel/
 
 # macOS
 .DS_Store
