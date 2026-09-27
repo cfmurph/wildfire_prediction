@@ -57,7 +57,13 @@ def fetch_text(url: str, timeout: float) -> str:
     headers = {"User-Agent": "bc-wildfire-watch/0.1", "Accept": "text/csv"}
     with httpx.Client(timeout=timeout, headers=headers) as client:
         response = client.get(url)
-        response.raise_for_status()
+        # A rejected map key is often a 4xx body, not a 200 CSV. Do not log the
+        # URL: it contains the map key.
+        if response.status_code >= 400:
+            lowered = response.text.lower()
+            if "invalid" in lowered and "key" in lowered:
+                raise InvalidMapKey()
+            response.raise_for_status()
         return response.text
 
 
@@ -80,6 +86,14 @@ def _acquired_at(date: str, time_hhmm: str) -> str | None:
     day = date.strip()
     clock = time_hhmm.strip().zfill(4)
     if len(day) < 10 or len(clock) != 4 or not clock.isdigit():
+        return None
+    try:
+        datetime.strptime(day[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
+    hour = int(clock[:2])
+    minute = int(clock[2:])
+    if hour > 23 or minute > 59:
         return None
     return f"{day[:10]}T{clock[:2]}:{clock[2:]}:00Z"
 

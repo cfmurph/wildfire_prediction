@@ -21,21 +21,26 @@ class ClusterIn(BaseModel):
     daynight: dict[str, int] = Field(default_factory=dict)
     bbox: list[float] | None = None
 
-    @field_validator("confidence")
+    @field_validator("confidence", mode="before")
     @classmethod
-    def limit_confidence(cls, value: dict[str, int]) -> dict[str, int]:
+    def limit_confidence(cls, value: object) -> dict[str, int]:
+        # Run before the dict[str, int] check so a bad count becomes 0
+        # instead of a 422.
+        incoming = value if isinstance(value, dict) else {}
         clean: dict[str, int] = {}
         for key in ("high", "nominal", "low", "unknown"):
-            raw = value.get(key, 0)
+            raw = incoming.get(key, 0)
             try:
                 clean[key] = max(0, min(int(raw), 100_000))
             except (TypeError, ValueError):
                 clean[key] = 0
         return clean
 
-    @field_validator("satellites")
+    @field_validator("satellites", mode="before")
     @classmethod
-    def limit_satellites(cls, value: list[str]) -> list[str]:
+    def limit_satellites(cls, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
         cleaned: list[str] = []
         for item in value[:8]:
             token = "".join(ch for ch in str(item) if ch.isalnum() or ch in "-_")[:12]

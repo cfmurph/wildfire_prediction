@@ -17,4 +17,6 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def compass_label(degrees: float) -> str:
     directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-    return directions[round(degrees / 45) % 8]
+    # Half-up. Python's round() uses banker's rounding, so 22.5° became N.
+    index = int((float(degrees) % 360.0) / 45.0 + 0.5) % 8
+    return directions[index]

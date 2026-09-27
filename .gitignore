@@ -55,6 +55,11 @@ out/
 *.log
 logs/
 
+# Test output
+.coverage
+coverage.xml
+htmlcov/
+
 # Model checkpoints (use MLflow artifact store instead)
 *.pt
 *.pth

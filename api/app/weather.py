@@ -60,6 +60,8 @@ def parse_stations(payload: dict) -> list[dict]:
         if not isinstance(feature, dict):
             continue
         props = feature.get("properties") or {}
+        if not isinstance(props, dict):
+            continue
         lat = _optional_float(props.get("lat"))
         lon = _optional_float(props.get("lon"))
         fwi = _optional_float(props.get("fwi"))
@@ -149,7 +151,10 @@ def load_weather() -> dict:
     except Exception:
         log.warning("CWFIS fire weather request failed")
         failure = _empty_failure("CWFIS fire weather is unreachable right now.")
-        weather_cache.set(CACHE_KEY, failure, min(60, settings.weather_cache_seconds or 60))
+        # A configured TTL of 0 means do not cache. `or 60` used to ignore that
+        # and pin the failure for a minute.
+        failure_ttl = min(60, settings.weather_cache_seconds)
+        weather_cache.set(CACHE_KEY, failure, failure_ttl)
         return failure
 
     result = {
