@@ -4,6 +4,7 @@ Grok situation report service (thin async wrapper around the existing client).
 
 from __future__ import annotations
 
+import json
 import os
 import logging
 from typing import Optional
@@ -37,19 +38,22 @@ async def generate_situation_report(
             "_Grok situation report unavailable — set XAI_API_KEY for AI-generated briefings._"
         )
 
-    payload_json = f"""{{
-  "fire_id": "{fire_id}",
-  "fire_name": "{fire_name or fire_id}",
-  "province": "BC",
-  "location": {{"lat": {lat}, "lon": {lon}}},
-  "current_area_ha": {current_area_ha},
-  "spread_forecast_24h": {{
-    "p50_area_ha": {spread_p50_ha},
-    "p75_area_ha": {spread_p75_ha}
-  }},
-  "fwi_summary": {{"FWI": {fwi}, "ISI": {isi}}},
-  "wind": {{"speed_ms": {wind_speed_ms}, "direction_deg": {wind_dir_deg}}}
-}}"""
+    payload_json = json.dumps(
+        {
+            "fire_id": fire_id,
+            "fire_name": fire_name or fire_id,
+            "province": "BC",
+            "location": {"lat": lat, "lon": lon},
+            "current_area_ha": current_area_ha,
+            "spread_forecast_24h": {
+                "p50_area_ha": spread_p50_ha,
+                "p75_area_ha": spread_p75_ha,
+            },
+            "fwi_summary": {"FWI": fwi, "ISI": isi},
+            "wind": {"speed_ms": wind_speed_ms, "direction_deg": wind_dir_deg},
+        },
+        indent=2,
+    )
 
     prompt = f"""You are a wildfire situation analyst for the BC Wildfire Service.
 
@@ -75,10 +79,10 @@ Situation briefing:"""
         )
         return response.choices[0].message.content.strip()
     except Exception as exc:
-        log.error(f"Grok API error: {exc}")
+        log.error("Grok API error (%s)", type(exc).__name__)
         return (
             f"**{fire_name or fire_id}** — {current_area_ha:,.0f} ha\n\n"
             f"FWI: {fwi:.0f} | ISI: {isi:.0f} | Wind: {wind_speed_ms:.0f} m/s\n"
             f"24h spread forecast: {spread_p50_ha:,.0f}–{spread_p75_ha:,.0f} ha\n\n"
-            f"_AI briefing temporarily unavailable: {exc}_"
+            "_AI briefing temporarily unavailable._"
         )
