@@ -71,6 +71,63 @@ python src/training/train.py --config-name baseline_rf
 mlflow ui --backend-store-uri experiments/mlruns
 ```
 
+The package build backend is `setuptools.build_meta`. `pip install -e .` installs the research code (including PyTorch). The web API does not use that install.
+
+---
+
+## Web app (Milestone 1)
+
+Public map of near-real-time VIIRS hotspots in British Columbia, CWFIS fire-weather stations, and an on-demand Grok situation report. No trained spread model is required. Spread probabilities are left unset on purpose, and the live prompt tells Grok not to invent a forecast.
+
+### Run locally
+
+```bash
+# API — Python 3.11+, lightweight deps only
+python -m venv .venv && source .venv/bin/activate
+pip install -r api/requirements.txt
+cp api/.env.example api/.env   # fill in FIRMS_MAP_KEY and XAI_API_KEY
+set -a && source api/.env && set +a
+PYTHONPATH=api:. uvicorn app.main:app --reload --port 8000
+
+# Web
+cd apps/web
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+Open http://localhost:3000. The browser calls `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
+
+`GET /health` reports whether keys are set, without revealing them. `GET /hotspots` needs `FIRMS_MAP_KEY` (cached about 10 minutes). `GET /weather` reads CWFIS station FWI and degrades softly if that service is down. `POST /report` needs `XAI_API_KEY` and uses `src/response/grok_client.py` with `prompts/live_situation_report.txt`.
+
+```bash
+pip install -r api/requirements-dev.txt
+pytest -c api/pytest.ini --rootdir api api/api_tests
+```
+
+Root `pytest` still runs only the research tests under `tests/`.
+
+### Deploy
+
+**API on Railway.** Connect the repo. `railway.toml` builds `api/Dockerfile` with the repository root as context so the image can copy `src/` and `prompts/`. Do not set the service root to `api/`. The container listens on `PORT`. Health check: `GET /health`.
+
+Set `FIRMS_MAP_KEY`, `XAI_API_KEY`, and `CORS_ORIGINS` to the Vercel origin (comma-separated; local default is `http://localhost:3000` and `http://127.0.0.1:3000`). CORS is read when the process starts. Optional: `GROK_MODEL`, `FIRMS_DAY_RANGE` (1–5), `FIRMS_SOURCES`, `HOTSPOT_CACHE_SECONDS`, `WEATHER_CACHE_SECONDS`. `POST /report` calls a billed API — add your own auth or rate limit before a wide public launch. The in-memory cache is per process.
+
+**Web on Vercel.** Root directory `apps/web`, framework Next.js. Set `NEXT_PUBLIC_API_URL` to the public Railway URL with no trailing slash.
+
+`apps/web/vercel.json` sets `ignoreCommand` to `git diff HEAD^ HEAD --quiet -- .`. Vercel runs that from `apps/web`, so a commit that does not touch the web app (ML-only changes under `src/`, `configs/`, `scripts/`, `tests/`) skips the web deployment. Exit 0 skips the build; exit 1 builds.
+
+### Environment variables
+
+| Variable | Service | Required | Purpose |
+|---|---|---|---|
+| `FIRMS_MAP_KEY` | API | for `/hotspots` | NASA FIRMS map key |
+| `XAI_API_KEY` | API | for `/report` | xAI Grok key read by `GrokClient` |
+| `CORS_ORIGINS` | API | no | Browser origins allowed to call the API |
+| `NEXT_PUBLIC_API_URL` | Web | in production | API base URL |
+
+Copy `api/.env.example` and `apps/web/.env.example`. They contain placeholders only. Do not commit real keys. `.env` files are gitignored; the examples are not.
+
 ---
 
 ## Project structure
@@ -82,6 +139,8 @@ wildfire_prediction/
 │   ├── processed/      # Assembled .npz patches + split manifests (gitignored)
 │   └── external/       # Alberta/Saskatchewan (Phase 2)
 ├── notebooks/          # EDA + experiment notebooks
+├── api/                # FastAPI service (Railway) — hotspots, weather, reports
+├── apps/web/           # Next.js map (Vercel)
 ├── src/
 │   ├── data/           # Download + assembly + PyTorch Dataset
 │   ├── models/         # RF, U-Net, ConvLSTM
@@ -92,7 +151,7 @@ wildfire_prediction/
 ├── prompts/            # Grok prompt templates
 ├── experiments/        # MLflow tracking root
 ├── scripts/            # Data download + experiment runner
-└── tests/
+└── tests/              # Research tests (API tests live in api/api_tests)
 ```
 
 ---
