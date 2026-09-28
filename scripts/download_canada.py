@@ -208,12 +208,15 @@ def download_firms_hotspots(
     map_key: Optional[str] = None,
 ) -> None:
     """
-    Download VIIRS 375m active-fire observations for BC from NASA FIRMS.
+    Download VIIRS 375m active-fire hotspot archive for BC from NASA FIRMS.
 
-    Requires a free FIRMS MAP_KEY: https://firms.modaps.eosdis.nasa.gov/api/
-    Set env var FIRMS_MAP_KEY or pass --firms-key.
+    NOTE: Suomi NPP (SNPP) VIIRS data products end November 1, 2026.
+    This function downloads from the best available satellite per year:
+      2012-2017: SNPP (VIIRS_SNPP_NRT_2)
+      2018-2021: SNPP + NOAA-20 (VIIRS_NOAA20_NRT_2)
+      2022+:     NOAA-20 + NOAA-21 (VIIRS_NOAA21_NRT_2) [SNPP retired]
 
-    Format: CSV, one file per year
+    Requires FIRMS MAP_KEY: https://firms.modaps.eosdis.nasa.gov/api/
     """
     log.info("=== NASA FIRMS VIIRS 375m hotspots ===")
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -228,6 +231,23 @@ def download_firms_hotspots(
 
     bb = BC_BBOX
     area = f"{bb['lon_min']},{bb['lat_min']},{bb['lon_max']},{bb['lat_max']}"
+    base = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
+
+    # FIRMS area API: max 10 days per request.
+    # Source names for the area API (no _NRT_2 suffix — same names for archive):
+    #   VIIRS_SNPP_NRT   (2012–2026 Oct 31)
+    #   VIIRS_NOAA20_NRT (2018+)
+    #   VIIRS_NOAA21_NRT (2024+; NOAA-21 only has full data from Jan 2024 in archive)
+    # We request fire season (Apr–Oct) in 10-day chunks and merge.
+
+    import pandas as pd
+    from datetime import date, timedelta
+
+    def sources_for_year(y: int) -> list[str]:
+        sources = ["VIIRS_SNPP_NRT"]
+        if y >= 2018: sources.append("VIIRS_NOAA20_NRT")
+        if y >= 2024: sources.append("VIIRS_NOAA21_NRT")
+        return sources
 
     for year in years:
         out = dest_dir / f"viirs_375m_bc_{year}.csv"
@@ -235,16 +255,40 @@ def download_firms_hotspots(
             log.info(f"  already exists: {out.name}")
             continue
 
-        # FIRMS area API: annual archive
-        url = (
-            f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{key}"
-            f"/VIIRS_SNPP_NRT/{area}/1/{year}-01-01"
-        )
-        try:
-            _download_file(url, out, f"FIRMS VIIRS {year}")
-            log.info(f"  Saved → {out}")
-        except Exception as exc:
-            log.warning(f"  FIRMS {year} failed: {exc}")
+        # Fire season: Apr 1 – Oct 31, in 10-day windows
+        season_start = date(year, 4, 1)
+        season_end   = date(year, 10, 31)
+        all_dfs = []
+        chunk_date = season_start
+
+        while chunk_date <= season_end:
+            chunk_str = chunk_date.strftime("%Y-%m-%d")
+            days = min(5, (season_end - chunk_date).days + 1)  # FIRMS max is 5 days/request
+
+            for source in sources_for_year(year):
+                url = f"{base}/{key}/{source}/{area}/{days}/{chunk_str}"
+                try:
+                    r = requests.get(url, timeout=30)
+                    if r.ok and r.text.strip():
+                        lines = r.text.strip().split("\n")
+                        if len(lines) > 1:   # has data rows beyond header
+                            import io
+                            df = pd.read_csv(io.StringIO(r.text))
+                            df["satellite_source"] = source
+                            all_dfs.append(df)
+                except Exception as exc:
+                    log.warning(f"  FIRMS {source} {chunk_str} ({days}d): {exc}")
+
+            chunk_date += timedelta(days=days)
+
+        if all_dfs:
+            combined = pd.concat(all_dfs, ignore_index=True).drop_duplicates(
+                subset=["latitude", "longitude", "acq_date", "acq_time"]
+            )
+            combined.to_csv(out, index=False)
+            log.info(f"  Saved → {out} ({len(combined):,} hotspots)")
+        else:
+            log.warning(f"  No FIRMS data for {year}")
 
 
 # ---------------------------------------------------------------------------
@@ -448,43 +492,87 @@ def download_cwfis_fwi(dest_dir: Path, years: list[int]) -> None:
 
 def download_cdem(dest_dir: Path) -> None:
     """
-    Download the Canadian Digital Elevation Model at 1 arc-second (~30m).
+    Download SRTM 90m elevation data for BC using the `elevation` Python package.
 
-    Source: NRCan Open Government
-    The full national mosaic is large (~12 GB). We download BC-relevant tiles
-    or the national mosaic index and then retrieve only BC tiles.
+    `elevation` wraps NASA SRTM data via CGIAR, handles tile stitching automatically,
+    and clips to the BC bounding box. Outputs a single GeoTIFF.
 
-    For convenience, we provide the 1-km pre-mosaicked version URL when available.
-    Manual alternative: https://open.canada.ca/data/en/dataset/7f245e4d-76c2-4caa-951a-45d1d2051333
+    Install: pip install elevation
     """
-    log.info("=== Canadian Digital Elevation Model (CDEM) ===")
+    log.info("=== Canadian Digital Elevation Model (CDEM / SRTM 90m) ===")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # NRCan CDEM mosaic for BC — GeoTIFF
-    # Tile index: https://ftp.maps.canada.ca/pub/nrcan_rncan/elevation/cdem_mnec/
-    ftp_base = "https://ftp.maps.canada.ca/pub/nrcan_rncan/elevation/cdem_mnec"
+    out = dest_dir / "cdem_bc_srtm90.tif"
+    if out.exists():
+        log.info(f"  already exists: {out.name}")
+        return
 
-    # BC spans NTS sheets 82, 83, 92, 93, 94, 102, 103, 104
-    bc_sheets = ["082", "083", "092", "093", "094", "102", "103", "104"]
+    try:
+        import elevation
+        import rasterio
+        from rasterio.merge import merge as rio_merge
 
-    for sheet in bc_sheets:
-        fname = f"cdem_dem_{sheet}_tif.zip"
-        out_zip = dest_dir / fname
-        out_dir = dest_dir / sheet
+        # BC is too large for one elevation request (>24 SRTM tiles).
+        # Tile into 5°lon × 4°lat chunks (≤20 tiles each) then mosaic.
+        tiles = []
+        lon_steps = [(-139.1, -134), (-134, -129), (-129, -124), (-124, -119), (-119, -114.0)]
+        lat_steps = [(48.2, 52), (52, 56), (56, 60.0)]
 
-        if out_dir.exists():
-            log.info(f"  already extracted: {sheet}")
-            continue
+        log.info("  Downloading SRTM 90m for BC in tiles…")
+        for i, (lon_min, lon_max) in enumerate(lon_steps):
+            for j, (lat_min, lat_max) in enumerate(lat_steps):
+                tile_out = dest_dir / f"srtm_tile_{i}_{j}.tif"
+                if tile_out.exists():
+                    tiles.append(tile_out)
+                    continue
+                try:
+                    elevation.clip(
+                        bounds=(lon_min, lat_min, lon_max, lat_max),
+                        output=str(tile_out.resolve()),
+                        product="SRTM3",
+                    )
+                    elevation.clean()
+                    tiles.append(tile_out)
+                    log.info(f"    Tile {i},{j} done")
+                except Exception as te:
+                    log.warning(f"    Tile {i},{j} failed: {te}")
 
-        url = f"{ftp_base}/{fname}"
-        try:
-            _download_file(url, out_zip, f"CDEM {sheet}")
-            with zipfile.ZipFile(out_zip, "r") as z:
-                z.extractall(out_dir)
-            out_zip.unlink()
-            log.info(f"  Extracted → {out_dir}")
-        except Exception as exc:
-            log.warning(f"  CDEM {sheet} failed: {exc}")
+        if tiles:
+            log.info(f"  Mosaicking {len(tiles)} tiles → {out.name}")
+            datasets = [rasterio.open(t) for t in tiles]
+            mosaic, transform = rio_merge(datasets)
+            profile = datasets[0].profile.copy()
+            profile.update({"width": mosaic.shape[2], "height": mosaic.shape[1], "transform": transform})
+            with rasterio.open(out, "w", **profile) as dst:
+                dst.write(mosaic)
+            for ds in datasets:
+                ds.close()
+            log.info(f"  Saved → {out}")
+            return
+    except ImportError:
+        log.warning("  elevation package not installed. Run: pip install elevation")
+    except Exception as exc:
+        log.warning(f"  elevation package failed: {exc}")
+
+    # Fallback: OpenTopography global DEM via direct API
+    log.info("  Trying OpenTopography SRTM fallback…")
+    ot_url = (
+        "https://portal.opentopography.org/API/globaldem"
+        "?demtype=SRTM90_v4"
+        "&west=-139.1&east=-114.0&south=48.2&north=60.0"
+        "&outputFormat=GTiff"
+        "&API_Key=demoapikeyot2022"  # public demo key — get free key at opentopography.org
+    )
+    try:
+        _download_file(ot_url, out, "SRTM 90m (OpenTopography)")
+        log.info(f"  Saved → {out}")
+    except Exception as exc:
+        log.warning(f"  OpenTopography failed: {exc}")
+        log.info(
+            "  Manual alternative: register at https://portal.opentopography.org\n"
+            "  and download SRTM 90m for BC (-139 to -114, 48 to 60)\n"
+            "  Place the GeoTIFF at data/raw/cdem/cdem_bc_srtm90.tif"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -509,23 +597,54 @@ def download_landcover(dest_dir: Path) -> None:
         log.info("  already extracted.")
         return
 
-    # NRCan STAC / direct download URL
-    url = (
-        "https://ftp.maps.canada.ca/pub/nrcan_rncan/Land-cover_Couverture-du-sol"
-        "/canada-landcover_canada-couverture-du-sol/CanadaLandcover2020.zip"
+    # URLs sourced from NRCan Open Data CKAN API (package ee1580ab-a23d-4f86-a09b-79763677eb47)
+    urls_to_try = [
+        # Primary: NRCan S3 COG (correct path confirmed via CKAN API 2025-09-27)
+        "https://datacube-prod-data-public.s3.ca-central-1.amazonaws.com/store/land/landcover/landcover-2020-classification.tif",
+        # FTP fallbacks
+        "https://ftp.maps.canada.ca/pub/nrcan_rncan/Land-cover_Couverture-du-sol/canada-landcover_canada-couverture-du-sol/CanadaLandcover2020.zip",
+        "https://ftp.maps.canada.ca/pub/nrcan_rncan/Land-cover_Couverture-du-sol/canada-landcover_canada-couverture-du-sol/landcover-2020-classification.zip",
+    ]
+
+    for url in urls_to_try:
+        try:
+            if "stac" in url or "services.geo.ca" in url:
+                # STAC item — fetch metadata to get asset URL
+                resp = requests.get(url, timeout=15)
+                resp.raise_for_status()
+                item = resp.json()
+                asset_url = (
+                    item.get("assets", {})
+                    .get("data", item.get("assets", {}).get("image", {}))
+                    .get("href", "")
+                )
+                if asset_url:
+                    tif_out = dest_dir / "landcover-2020-classification.tif"
+                    _download_file(asset_url, tif_out, "Canada Landcover 2020 (STAC COG)")
+                    extracted.mkdir(exist_ok=True)
+                    log.info(f"  Saved → {tif_out}")
+                    return
+            elif url.endswith(".zip"):
+                _download_file(url, out, "Canada Landcover 2020")
+                with zipfile.ZipFile(out, "r") as z:
+                    z.extractall(extracted)
+                out.unlink(missing_ok=True)
+                log.info(f"  Extracted → {extracted}")
+                return
+        except Exception as exc:
+            log.warning(f"  URL failed: {exc}")
+
+    log.error("  All Landcover download attempts failed.")
+    log.info(
+        "\n  Manual download (choose one):\n"
+        "  Option A — NRCan Open Data catalogue:\n"
+        "    https://open.canada.ca/data/en/dataset/4e615eae-b90c-420b-adee-2ca35896caf6\n"
+        "  Option B — Direct FTP browser:\n"
+        "    https://ftp.maps.canada.ca/pub/nrcan_rncan/Land-cover_Couverture-du-sol/\n"
+        "  Place any downloaded GeoTIFF in: data/raw/landcover/\n"
+        "\n  NOTE: Training can proceed without landcover (channel will be zero-filled).\n"
+        "        Add it later to improve model accuracy."
     )
-    try:
-        _download_file(url, out, "Canada Landcover 2020")
-        with zipfile.ZipFile(out, "r") as z:
-            z.extractall(extracted)
-        out.unlink()
-        log.info(f"  Extracted → {extracted}")
-    except Exception as exc:
-        log.error(f"  Landcover download failed: {exc}")
-        log.info(
-            "  Manual download: https://open.canada.ca/data/en/dataset/"
-            "4e615eae-b90c-420b-adee-2ca35896caf6"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -534,12 +653,12 @@ def download_landcover(dest_dir: Path) -> None:
 
 def download_modis_ndvi(dest_dir: Path, years: list[int]) -> None:
     """
-    Download MODIS MOD13A2 16-day NDVI composites for BC tiles.
+    Download MODIS MOD13A2 16-day NDVI composites for BC using bounding box search.
+
+    Uses bounding_box instead of granule_name wildcards to avoid the CMR
+    5-pattern wildcard limit. BC bounding box: lon -139 to -114, lat 48 to 60.
 
     Requires a free NASA Earthdata account: https://urs.earthdata.nasa.gov/
-    Uses the `earthaccess` Python package for authenticated downloads.
-
-    BC spans MODIS tiles: h09v02, h09v03, h10v02, h10v03
     """
     log.info("=== MODIS MOD13A2 NDVI ===")
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -553,32 +672,38 @@ def download_modis_ndvi(dest_dir: Path, years: list[int]) -> None:
         )
         return
 
-    bc_tiles = ["h09v02", "h09v03", "h10v02", "h10v03"]
-
     try:
         earthaccess.login(strategy="netrc")
     except Exception:
         log.warning(
-            "  earthaccess login failed. Create ~/.netrc with your NASA Earthdata credentials:\n"
+            "  earthaccess login failed. Create ~/.netrc with:\n"
             "    machine urs.earthdata.nasa.gov login YOUR_USER password YOUR_PASS"
         )
         return
 
     for year in years:
-        results = earthaccess.search_data(
-            short_name="MOD13A2",
-            version="061",
-            temporal=(f"{year}-04-01", f"{year}-10-31"),
-            granule_name=[f"*{tile}*" for tile in bc_tiles],
-        )
-        if not results:
-            log.warning(f"  No MOD13A2 results for {year}")
+        year_dir = dest_dir / str(year)
+        # Skip if already has files
+        if year_dir.exists() and len(list(year_dir.glob("*.hdf"))) > 10:
+            log.info(f"  {year}: already downloaded ({len(list(year_dir.glob('*.hdf')))} files)")
             continue
 
-        year_dir = dest_dir / str(year)
         year_dir.mkdir(exist_ok=True)
-        log.info(f"  Downloading {len(results)} MOD13A2 granules for {year}…")
-        earthaccess.download(results, str(year_dir))
+        try:
+            # Use bounding_box instead of granule_name wildcards (avoids CMR 5-pattern limit)
+            results = earthaccess.search_data(
+                short_name="MOD13A2",
+                version="061",
+                temporal=(f"{year}-04-01", f"{year}-10-31"),
+                bounding_box=(-139.1, 48.2, -114.0, 60.0),
+            )
+            if not results:
+                log.warning(f"  No MOD13A2 results for {year}")
+                continue
+            log.info(f"  Downloading {len(results)} MOD13A2 granules for {year}…")
+            earthaccess.download(results, str(year_dir))
+        except Exception as exc:
+            log.error(f"  MODIS {year} failed: {exc}")
 
     log.info("  MODIS NDVI download complete.")
 

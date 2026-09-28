@@ -21,10 +21,25 @@ log = logging.getLogger(__name__)
 
 BC_BBOX = "-139,48,-114,60"
 FIRMS_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
+
+# Suomi NPP VIIRS is being retired November 1, 2026.
+# Real-time feed now uses NOAA-20 (J1) and NOAA-21 (J2).
+# Historical archive (2012-2023 training) still uses SNPP.
+FIRMS_NRT_SOURCES = [
+    "VIIRS_NOAA21_NRT",   # NOAA-21 (J2, 2022+) — highest priority
+    "VIIRS_NOAA20_NRT",   # NOAA-20 (J1, 2018+)
+]
+FIRMS_ARCHIVE_SOURCES = [
+    "VIIRS_SNPP_NRT_2",   # SNPP archive (2012-2021)
+    "VIIRS_NOAA20_NRT_2", # NOAA-20 archive (2018+)
+    "VIIRS_NOAA21_NRT_2", # NOAA-21 archive (2022+)
+]
+
+# WMS tile fallback (no auth needed) — update to NOAA-20 layer
 FIRMS_WMS = (
     "https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/"
     "?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1"
-    "&LAYERS=fires_viirs_snpp&STYLES=&FORMAT=image/png"
+    "&LAYERS=fires_viirs_noaa20&STYLES=&FORMAT=image/png"
     "&TRANSPARENT=true&BGCOLOR=0x000000&CRS=EPSG:4326"
     "&WIDTH=256&HEIGHT=256"
 )
@@ -41,14 +56,25 @@ async def get_hotspots_geojson(days: int = 1) -> dict:
         log.warning("FIRMS_MAP_KEY not set — returning empty hotspot collection")
         return _empty_fc()
 
-    url = f"{FIRMS_BASE}/{map_key}/VIIRS_SNPP_NRT/{BC_BBOX}/{days}"
+    # Try NOAA-21 → NOAA-20 in sequence; merge results for maximum coverage
+    all_dfs = []
+    for source in FIRMS_NRT_SOURCES:
+        url = f"{FIRMS_BASE}/{map_key}/{source}/{BC_BBOX}/{days}"
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(url)
+                if resp.ok:
+                    partial = pd.read_csv(io.StringIO(resp.text))
+                    if not partial.empty:
+                        partial["satellite_source"] = source
+                        all_dfs.append(partial)
+        except Exception as exc:
+            log.warning(f"FIRMS {source} failed: {exc}")
+
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            df = pd.read_csv(io.StringIO(resp.text))
+        df = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
     except Exception as exc:
-        log.error(f"FIRMS fetch failed: {exc}")
+        log.error(f"FIRMS merge failed: {exc}")
         return _empty_fc()
 
     if df.empty:
