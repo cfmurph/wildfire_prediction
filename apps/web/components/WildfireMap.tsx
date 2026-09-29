@@ -81,12 +81,17 @@ export default function WildfireMap({ view, historyYear, onFireSelect, selectedF
   const removeLayer = useCallback((id: string) => {
     if (!map.current) return;
     if (map.current.getLayer(id)) map.current.removeLayer(id);
+  }, []);
+
+  const removeSource = useCallback((id: string) => {
+    if (!map.current) return;
     if (map.current.getSource(id)) map.current.removeSource(id);
   }, []);
 
   const clearAllDataLayers = useCallback(() => {
+    // Remove all layers first, then sources (a source can't be removed while layers use it)
     const layers = [
-      "active-fires", "active-fires-glow",
+      "active-fires-glow", "active-fires",
       "hotspots", "firms-wms",
       "history-fill", "history-outline",
       "spread-p75", "spread-p50", "spread-p25",
@@ -94,7 +99,14 @@ export default function WildfireMap({ view, historyYear, onFireSelect, selectedF
       "fwi-stations",
     ];
     layers.forEach(removeLayer);
-  }, [removeLayer]);
+    // Now safe to remove sources
+    const sources = [
+      "active-fires", "hotspots", "firms-wms",
+      "history-fill", "spread-p75", "spread-p50", "spread-p25",
+      "risk-heat", "fwi-stations",
+    ];
+    sources.forEach(removeSource);
+  }, [removeLayer, removeSource]);
 
   // ── View: Current (active fires + FIRMS hotspots + FWI) ───────────────────
   const loadCurrentView = useCallback(async () => {
