@@ -16,7 +16,7 @@ Deployed on Railway. All secrets are environment variables.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import fires, weather, predict, risk, situation
+from api.routers import fires, weather, predict, risk, situation, ignition
 
 app = FastAPI(
     title="Wildfire Prediction API",
@@ -36,6 +36,7 @@ app.include_router(weather.router,   prefix="/api/v1/weather",   tags=["weather"
 app.include_router(predict.router,   prefix="/api/v1/predict",   tags=["predict"])
 app.include_router(risk.router,      prefix="/api/v1/risk",      tags=["risk"])
 app.include_router(situation.router, prefix="/api/v1/situation", tags=["situation"])
+app.include_router(ignition.router,  prefix="/api/v1/ignition",  tags=["ignition"])
 
 
 @app.get("/")

@@ -20,11 +20,14 @@ const FIRMS_WMS_TILES =
 interface Props {
   view: View;
   historyYear: number;
+  riskMonth: number;
+  riskLayers: { lightning: boolean; human: boolean };
   onFireSelect: (fire: SelectedFire) => void;
   selectedFire: SelectedFire | null;
+  onRiskPointClick: (point: { lat: number; lon: number }) => void;
 }
 
-export default function WildfireMap({ view, historyYear, onFireSelect, selectedFire }: Props) {
+export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, onFireSelect, selectedFire, onRiskPointClick }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const popup = useRef<maplibregl.Popup | null>(null);
@@ -96,6 +99,7 @@ export default function WildfireMap({ view, historyYear, onFireSelect, selectedF
       "history-fill", "history-outline",
       "spread-p75", "spread-p50", "spread-p25",
       "risk-heat",
+      "ignition-lightning", "ignition-human",
       "fwi-stations",
     ];
     layers.forEach(removeLayer);
@@ -103,7 +107,7 @@ export default function WildfireMap({ view, historyYear, onFireSelect, selectedF
     const sources = [
       "active-fires", "hotspots", "firms-wms",
       "history-fill", "spread-p75", "spread-p50", "spread-p25",
-      "risk-heat", "fwi-stations",
+      "risk-heat", "ignition-lightning", "ignition-human", "fwi-stations",
     ];
     sources.forEach(removeSource);
   }, [removeLayer, removeSource]);
@@ -356,37 +360,108 @@ export default function WildfireMap({ view, historyYear, onFireSelect, selectedF
   }
 
   // ── View: Risk ─────────────────────────────────────────────────────────────
-  const loadRiskView = useCallback(async () => {
+  const loadRiskView = useCallback(async (month: number) => {
     if (!map.current) return;
     clearAllDataLayers();
 
-    try {
-      const res = await fetch(`${API}/api/v1/risk/map`);
-      const data = await res.json();
-      if (!data.features?.length) return;
+    // Load climatology risk surface AND ignition prediction in parallel
+    const [riskRes, ignitionRes] = await Promise.allSettled([
+      fetch(`${API}/api/v1/risk/monthly?month=${month}`),
+      fetch(`${API}/api/v1/ignition/causes?month=${month}`),
+    ]);
 
-      map.current.addSource("risk-heat", { type: "geojson", data });
-      map.current.addLayer({
-        id: "risk-heat",
-        type: "heatmap",
-        source: "risk-heat",
-        paint: {
-          "heatmap-weight": ["interpolate", ["linear"], ["get", "burn_probability"], 0, 0, 1, 1],
-          "heatmap-intensity": 1.2,
-          "heatmap-radius": 30,
-          "heatmap-color": [
-            "interpolate", ["linear"], ["heatmap-density"],
-            0,   "rgba(0,0,0,0)",
-            0.2, "#22c55e",
-            0.4, "#eab308",
-            0.6, "#f97316",
-            0.8, "#ef4444",
-            1,   "#7c3aed",
-          ],
-          "heatmap-opacity": 0.75,
-        },
-      });
-    } catch {}
+    // Climatology layer (background context)
+    if (riskRes.status === "fulfilled" && riskRes.value.ok) {
+      try {
+        const data = await riskRes.value.json();
+        if (data.features?.length) {
+          map.current.addSource("risk-heat", { type: "geojson", data });
+          map.current.addLayer({
+            id: "risk-heat",
+            type: "circle",
+            source: "risk-heat",
+            paint: {
+              "circle-radius": 20,
+              "circle-blur": 1.5,
+              "circle-opacity": 0.35,
+              "circle-color": [
+                "step", ["get", "burn_probability"],
+                "#22c55e", 0.03, "#eab308", 0.08, "#f97316", 0.18, "#ef4444",
+              ],
+            },
+          });
+        }
+      } catch {}
+    }
+
+    // Ignition prediction layer — lightning (blue) and human (orange) separately
+    if (ignitionRes.status === "fulfilled" && ignitionRes.value.ok) {
+      try {
+        const causes = await ignitionRes.value.json();
+
+        // Lightning-caused ignition risk (blue tones) — C: clickable for spread forecast
+        const lightning = causes.lightning;
+        if (lightning?.features?.length) {
+          map.current.addSource("ignition-lightning", { type: "geojson", data: lightning });
+          map.current.addLayer({
+            id: "ignition-lightning",
+            type: "circle",
+            source: "ignition-lightning",
+            paint: {
+              "circle-radius": ["interpolate", ["linear"], ["get", "prob"], 0, 8, 0.5, 22],
+              "circle-color": "#3b82f6",
+              "circle-opacity": 0.75,
+              "circle-stroke-color": "#1d4ed8",
+              "circle-stroke-width": 0.5,
+              "circle-blur": 0.3,
+            },
+          });
+          map.current.on("click", "ignition-lightning", (e) => {
+            const f = e.features?.[0];
+            if (!f?.geometry || f.geometry.type !== "Point") return;
+            const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
+            onRiskPointClick({ lat, lon });
+          });
+          map.current.on("mouseenter", "ignition-lightning", () => {
+            if (map.current) map.current.getCanvas().style.cursor = "crosshair";
+          });
+          map.current.on("mouseleave", "ignition-lightning", () => {
+            if (map.current) map.current.getCanvas().style.cursor = "";
+          });
+        }
+
+        // Human-caused ignition risk (amber tones) — also clickable
+        const human = causes.human;
+        if (human?.features?.length) {
+          map.current.addSource("ignition-human", { type: "geojson", data: human });
+          map.current.addLayer({
+            id: "ignition-human",
+            type: "circle",
+            source: "ignition-human",
+            paint: {
+              "circle-radius": ["interpolate", ["linear"], ["get", "prob"], 0, 7, 0.5, 18],
+              "circle-color": "#f59e0b",
+              "circle-opacity": 0.75,
+              "circle-stroke-color": "#d97706",
+              "circle-stroke-width": 0.5,
+              "circle-blur": 0.3,
+            },
+          });
+          map.current.on("click", "ignition-human", (e) => {
+            const f = e.features?.[0];
+            if (!f?.geometry || f.geometry.type !== "Point") return;
+            const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
+            onRiskPointClick({ lat, lon });
+          });
+          map.current.on("mouseenter", "ignition-human", () => {
+            if (map.current) map.current.getCanvas().style.cursor = "crosshair";
+          });
+          map.current.on("mouseleave", "ignition-human", () => {
+            if (map.current) map.current.getCanvas().style.cursor = "";
+          });
+        }
+      } catch {}
+    }
   }, [clearAllDataLayers]);
 
   // ── React to view changes ──────────────────────────────────────────────────
@@ -396,12 +471,24 @@ export default function WildfireMap({ view, historyYear, onFireSelect, selectedF
       if (view === "current")     loadCurrentView();
       if (view === "history")     loadHistoryView(historyYear);
       if (view === "predictions") loadPredictionsView();
-      if (view === "risk")        loadRiskView();
+      if (view === "risk")        loadRiskView(riskMonth);
     };
 
     if (map.current.isStyleLoaded()) onLoad();
     else map.current.once("load", onLoad);
-  }, [view, historyYear, loadCurrentView, loadHistoryView, loadPredictionsView, loadRiskView]);
+  }, [view, historyYear, riskMonth, loadCurrentView, loadHistoryView, loadPredictionsView, loadRiskView]);
+
+  // ── React to layer toggle changes (B) ─────────────────────────────────────
+  useEffect(() => {
+    if (!map.current || view !== "risk") return;
+    const setVis = (id: string, visible: boolean) => {
+      if (map.current?.getLayer(id)) {
+        map.current.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
+      }
+    };
+    setVis("ignition-lightning", riskLayers.lightning);
+    setVis("ignition-human", riskLayers.human);
+  }, [riskLayers, view]);
 
   // ── Fly to selected fire ───────────────────────────────────────────────────
   useEffect(() => {
