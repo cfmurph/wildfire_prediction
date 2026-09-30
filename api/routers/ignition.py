@@ -15,24 +15,24 @@ router = APIRouter()
 _MODEL = None
 _CLIM = None
 _DENSITIES = None
+_MONTHLY_RATES = None
 
 
 def _load_resources():
-    global _MODEL, _CLIM, _DENSITIES
+    global _MODEL, _CLIM, _DENSITIES, _MONTHLY_RATES
     if _MODEL is not None:
-        return _MODEL, _CLIM, _DENSITIES
+        return _MODEL, _CLIM, _DENSITIES, _MONTHLY_RATES
 
     import joblib
 
-    model_path = Path("experiments/checkpoints/ignition_rf.joblib")
-    clim_path = Path("data/processed/stats/fwi_climatology.json")
+    model_path  = Path("experiments/checkpoints/ignition_rf.joblib")
+    clim_path   = Path("data/processed/stats/fwi_climatology.json")
     density_path = Path("data/processed/stats/ignition_densities.json")
+    rates_path  = Path("data/processed/stats/monthly_fire_rates.json")
 
     if model_path.exists():
         _MODEL = joblib.load(model_path)
         log.info("Ignition RF model loaded")
-    else:
-        log.warning("Ignition RF model not found — run scripts/train_ignition.py")
 
     if clim_path.exists():
         with open(clim_path) as f:
@@ -41,13 +41,17 @@ def _load_resources():
     if density_path.exists():
         with open(density_path) as f:
             raw = json.load(f)
-        # Convert string keys back to (lat, lon) tuples
         _DENSITIES = {
             "lightning": {tuple(map(float, k.split(","))): v for k, v in raw["lightning"].items()},
             "human":     {tuple(map(float, k.split(","))): v for k, v in raw["human"].items()},
         }
 
-    return _MODEL, _CLIM, _DENSITIES
+    if rates_path.exists():
+        with open(rates_path) as f:
+            _MONTHLY_RATES = json.load(f)
+        log.info("Monthly fire rates loaded")
+
+    return _MODEL, _CLIM, _DENSITIES, _MONTHLY_RATES
 
 
 @router.get("/monthly")
