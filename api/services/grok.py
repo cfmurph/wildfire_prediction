@@ -34,7 +34,7 @@ async def generate_situation_report(
         return (
             f"**{fire_name or fire_id}** — {current_area_ha:,.0f} ha\n\n"
             f"Fire Weather Index: {fwi:.0f} | Wind: {wind_speed_ms:.0f} m/s\n"
-            f"Median 24h spread forecast: {spread_p50_ha:,.0f} ha (upper bound: {spread_p75_ha:,.0f} ha)\n\n"
+            f"Heuristic 24h spread estimate (not an ML forecast): {spread_p50_ha:,.0f}–{spread_p75_ha:,.0f} ha\n\n"
             "_Grok situation report unavailable — set XAI_API_KEY for AI-generated briefings._"
         )
 
@@ -45,7 +45,7 @@ async def generate_situation_report(
             "province": "BC",
             "location": {"lat": lat, "lon": lon},
             "current_area_ha": current_area_ha,
-            "spread_forecast_24h": {
+            "heuristic_spread_estimate_24h": {
                 "p50_area_ha": spread_p50_ha,
                 "p75_area_ha": spread_p75_ha,
             },
@@ -58,7 +58,7 @@ async def generate_situation_report(
     prompt = f"""You are a wildfire situation analyst for the BC Wildfire Service.
 
 Given this fire intelligence data, write a concise 3-4 sentence situation briefing for an emergency manager.
-Be specific about numbers. State the main risk driver (wind/drought/fuel). Recommend one immediate action.
+Be specific about numbers. The spread figures are a rough wind/FWI heuristic, not a model forecast; say so if you use them. State the main risk driver (wind/drought/fuel). Recommend one immediate action.
 
 Fire data:
 {payload_json}
@@ -83,6 +83,6 @@ Situation briefing:"""
         return (
             f"**{fire_name or fire_id}** — {current_area_ha:,.0f} ha\n\n"
             f"FWI: {fwi:.0f} | ISI: {isi:.0f} | Wind: {wind_speed_ms:.0f} m/s\n"
-            f"24h spread forecast: {spread_p50_ha:,.0f}–{spread_p75_ha:,.0f} ha\n\n"
+            f"Heuristic 24h spread estimate (not an ML forecast): {spread_p50_ha:,.0f}–{spread_p75_ha:,.0f} ha\n\n"
             "_AI briefing temporarily unavailable._"
         )

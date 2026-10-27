@@ -9,7 +9,6 @@ from pathlib import Path
 import httpx
 import openai
 import pytest
-from api.services.cwfis import _synthetic_fwi_grid
 from api.services.predictor import risk_grid, spread_forecast
 
 REPO = Path(__file__).resolve().parents[2]
@@ -226,20 +225,6 @@ def test_predict_and_risk_are_local_heuristics(client):
     assert risk_grid(n_lat=5, n_lon=5)["features"]
 
 
-def test_synthetic_fwi_grid_is_labeled():
-    grid = _synthetic_fwi_grid()
-    assert len(grid["features"]) == 100
-    assert all(item["properties"]["is_synthetic"] is True for item in grid["features"])
-    assert all(item["properties"]["station_name"] == "Synthetic" for item in grid["features"])
-
-
-@pytest.mark.xfail(
-    reason=(
-        "OPEN BUG: GET /api/v1/weather/fwi returns a fabricated 10×10 FWI grid when "
-        "CWFIS is unreachable. Points are labeled is_synthetic, but they are not observations."
-    ),
-    strict=True,
-)
 def test_weather_does_not_invent_stations_when_upstream_fails(client, monkeypatch):
     def respond(_url: str):
         raise httpx.ConnectError("cwfis down")
@@ -299,13 +284,6 @@ def _situation_body(**overrides):
     return body
 
 
-@pytest.mark.xfail(
-    reason=(
-        "OPEN BUG: POST /api/v1/situation without XAI_API_KEY still describes a "
-        "median 24h spread forecast from the heuristic model."
-    ),
-    strict=True,
-)
 def test_situation_without_key_does_not_state_a_spread_forecast(client):
     response = client.post("/api/v1/situation", json=_situation_body())
     assert response.status_code == 200
