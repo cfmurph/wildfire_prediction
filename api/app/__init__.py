@@ -1,1 +1,0 @@
-"""BC wildfire watch API."""

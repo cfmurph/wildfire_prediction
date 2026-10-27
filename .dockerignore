@@ -5,7 +5,10 @@ venv
 **/*.pyc
 **/.pytest_cache
 data
+!data/processed/stats/fwi_climatology.json
+!data/processed/stats/ignition_densities.json
 experiments
+!experiments/checkpoints/ignition_rf.joblib
 notebooks
 apps/web/node_modules
 apps/web/.next

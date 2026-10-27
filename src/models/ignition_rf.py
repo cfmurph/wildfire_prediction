@@ -30,7 +30,6 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 
@@ -53,6 +52,8 @@ def load_ignition_points(
     Returns DataFrame with columns:
       LATITUDE, LONGITUDE, YEAR, MONTH, CAUSE, FIRE_ID
     """
+    import geopandas as gpd  # training only; keeps the API image free of geopandas
+
     shps = list(nfdb_dir.rglob("*.shp"))
     if not shps:
         raise FileNotFoundError(f"No SHP files in {nfdb_dir}")

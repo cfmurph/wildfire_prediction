@@ -7,7 +7,7 @@ describe("ViewSwitcher", () => {
     const onChange = vi.fn();
     const onYearChange = vi.fn();
     const { rerender } = render(
-      <ViewSwitcher current="current" onChange={onChange} historyYear={2023} onYearChange={onYearChange} />,
+      <ViewSwitcher current="current" onChange={onChange} historyYear={2023} onYearChange={onYearChange} riskMonth={7} onRiskMonthChange={vi.fn()} />,
     );
     expect(screen.getByRole("button", { name: /Current/ })).toBeEnabled();
     expect(screen.queryByRole("slider")).not.toBeInTheDocument();
@@ -16,7 +16,7 @@ describe("ViewSwitcher", () => {
     expect(onChange).toHaveBeenCalledWith("history");
 
     rerender(
-      <ViewSwitcher current="history" onChange={onChange} historyYear={2023} onYearChange={onYearChange} />,
+      <ViewSwitcher current="history" onChange={onChange} historyYear={2023} onYearChange={onYearChange} riskMonth={7} onRiskMonthChange={vi.fn()} />,
     );
     const slider = screen.getByRole("slider");
     expect(slider).toHaveValue("2023");

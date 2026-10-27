@@ -461,7 +461,7 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
         }
       } catch {}
     }
-  }, [clearAllDataLayers]);
+  }, [clearAllDataLayers, onRiskPointClick]);
 
   // ── React to view changes ──────────────────────────────────────────────────
   useEffect(() => {

@@ -35,7 +35,7 @@ test("map page switches views against a mocked API", async ({ page }) => {
   await page.getByRole("button", { name: /Predictions/ }).click();
   await expect(page.getByRole("slider")).toHaveCount(0);
   await page.getByRole("button", { name: /Risk/ }).click();
-  await expect(page.getByText("Click a fire on the map")).toBeVisible();
+  await expect(page.getByText("BC-wide fire ignition probability")).toBeVisible();
 
   await expect.poll(() => calls.some((path) => path.includes("/api/v1/"))).toBe(true);
 });
