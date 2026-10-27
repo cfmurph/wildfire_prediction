@@ -5,3 +5,6 @@ pandas>=2.2
 openai>=1.30
 pydantic>=2.7
 python-dotenv>=1.0
+joblib>=1.4
+# Must match the version that saved experiments/checkpoints/ignition_rf.joblib
+scikit-learn==1.9.1

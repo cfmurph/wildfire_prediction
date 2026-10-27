@@ -15,20 +15,18 @@ router = APIRouter()
 _MODEL = None
 _CLIM = None
 _DENSITIES = None
-_MONTHLY_RATES = None
 
 
 def _load_resources():
-    global _MODEL, _CLIM, _DENSITIES, _MONTHLY_RATES
+    global _MODEL, _CLIM, _DENSITIES
     if _MODEL is not None:
-        return _MODEL, _CLIM, _DENSITIES, _MONTHLY_RATES
+        return _MODEL, _CLIM, _DENSITIES
 
     import joblib
 
     model_path  = Path("experiments/checkpoints/ignition_rf.joblib")
     clim_path   = Path("data/processed/stats/fwi_climatology.json")
     density_path = Path("data/processed/stats/ignition_densities.json")
-    rates_path  = Path("data/processed/stats/monthly_fire_rates.json")
 
     if model_path.exists():
         _MODEL = joblib.load(model_path)
@@ -46,12 +44,7 @@ def _load_resources():
             "human":     {tuple(map(float, k.split(","))): v for k, v in raw["human"].items()},
         }
 
-    if rates_path.exists():
-        with open(rates_path) as f:
-            _MONTHLY_RATES = json.load(f)
-        log.info("Monthly fire rates loaded")
-
-    return _MODEL, _CLIM, _DENSITIES, _MONTHLY_RATES
+    return _MODEL, _CLIM, _DENSITIES
 
 
 @router.get("/monthly")
@@ -68,7 +61,7 @@ async def ignition_monthly(
     Features used: lightning density, human activity density, FWI climatology,
     location (coast vs interior gradient), and seasonality.
     """
-    model, clim, densities, _ = _load_resources()
+    model, clim, densities = _load_resources()
 
     if model is None:
         # Return synthetic climatology as fallback
@@ -95,7 +88,7 @@ async def ignition_causes(
     Return separate lightning-caused and human-caused ignition probability grids.
     Allows the UI to show two overlapping layers with different colours.
     """
-    model, clim, densities, _ = _load_resources()
+    model, clim, densities = _load_resources()
     if model is None:
         return {"lightning": {"type": "FeatureCollection", "features": []},
                 "human": {"type": "FeatureCollection", "features": []}}
