@@ -352,9 +352,9 @@ class PatchExtractor:
         self.perimeters_dir = self.raw_dir / "bc_perimeters"
         self.era5_dir = self.raw_dir / "era5"
         self.fwi_dir = self.raw_dir / "fwi"
-        self.cdem_path = self.raw_dir / "cdem" / "cdem_bc_1km.tif"
+        self.cdem_path = self.raw_dir / "cdem" / "cdem_bc_srtm90.tif"
         self.ndvi_dir = self.raw_dir / "modis_ndvi"
-        self.landcover_path = self.raw_dir / "landcover" / "canada_lc_2020_bc_1km.tif"
+        self.landcover_path = self.raw_dir / "landcover" / "landcover-2020-classification.tif"
 
     # ------------------------------------------------------------------
     # Public API
@@ -702,7 +702,7 @@ class PatchExtractor:
                 transform,
                 OUTPUT_CRS,
                 shape,
-                resampling=Resampling.nearest,
+                resampling=Resampling.mode,  # dominant 30 m class in each 1 km pixel
             )
 
         # --- Previous fire mask (t=0) — provided by caller (synthetic progression) ---
@@ -985,6 +985,8 @@ def compute_channel_stats(
                 M2[c] += delta * delta2
 
     std = np.sqrt(np.where(count > 1, M2 / (count - 1), 0.0))
+    for i in np.flatnonzero(std == 0):
+        log.error(f"Channel '{CHANNELS[i]}' is constant across the training split; its source data was not loaded")
 
     stats = {
         ch: {"mean": float(mean[i]), "std": float(std[i])}
