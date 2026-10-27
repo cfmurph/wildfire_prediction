@@ -89,6 +89,38 @@ def compute_metrics(
     return metrics
 
 
+def compute_spread_metrics(
+    y_true: np.ndarray,     # (N, H, W) burn mask at T+1
+    y_prob: np.ndarray,     # (N, H, W) predicted probabilities
+    prev_mask: np.ndarray,  # (N, H, W) burn mask the model saw at T
+) -> dict[str, float]:
+    """
+    Metrics that separate spread skill from copying the day-T fire mask.
+
+    The target includes pixels already burned at T, so all-pixel AUC-PR
+    rewards persistence. These metrics score only pixels unburned at T,
+    against a baseline that ranks pixels by distance to the current fire.
+    """
+    from scipy.ndimage import distance_transform_edt
+
+    burned = prev_mask > 0
+    # Patches with no fire at T get a zero score everywhere
+    dist_score = np.stack([
+        1.0 / (1.0 + distance_transform_edt(~b)) if b.any() else np.zeros(b.shape)
+        for b in burned
+    ])
+    new = ~burned
+    y_new = y_true[new]
+    has_both = 0 < y_new.sum() < y_new.size
+
+    return {
+        "persistence_auc_pr": float(average_precision_score(y_true.ravel(), burned.ravel())),
+        "new_burn_auc_pr": float(average_precision_score(y_new, y_prob[new])) if has_both else float("nan"),
+        "new_burn_distance_auc_pr": float(average_precision_score(y_new, dist_score[new])) if has_both else float("nan"),
+        "new_burn_rate": float(y_new.mean()) if y_new.size else float("nan"),
+    }
+
+
 def compute_batch_metrics(
     y_true_batch: np.ndarray,  # (B, H, W)
     y_prob_batch: np.ndarray,  # (B, H, W)

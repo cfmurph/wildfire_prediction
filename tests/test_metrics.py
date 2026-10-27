@@ -6,7 +6,7 @@ Verifies metric implementations against known values and edge cases.
 
 import numpy as np
 import pytest
-from src.utils.metrics import compute_metrics, compare_models, calibration_data
+from src.utils.metrics import compute_metrics, compute_spread_metrics, compare_models, calibration_data
 
 
 # ---------------------------------------------------------------------------
@@ -174,3 +174,31 @@ class TestCompareModels:
     def test_handles_empty(self):
         table = compare_models({})
         assert isinstance(table, str)
+
+
+# ---------------------------------------------------------------------------
+# compute_spread_metrics
+# ---------------------------------------------------------------------------
+
+class TestSpreadMetrics:
+    @pytest.fixture
+    def growing_fire(self):
+        """A 10x10 fire at T that grows by a one-pixel ring at T+1."""
+        prev = np.zeros((1, 64, 64), dtype=np.float32)
+        prev[0, 27:37, 27:37] = 1
+        y = np.zeros_like(prev)
+        y[0, 26:38, 26:38] = 1
+        return y, prev
+
+    def test_copying_the_input_has_no_new_burn_skill(self, growing_fire):
+        y, prev = growing_fire
+        m = compute_spread_metrics(y, prev, prev)
+        assert m["persistence_auc_pr"] > 0.6
+        assert m["new_burn_auc_pr"] == pytest.approx(m["new_burn_rate"])
+
+    def test_predicting_the_new_ring_is_perfect(self, growing_fire):
+        y, prev = growing_fire
+        m = compute_spread_metrics(y, y, prev)
+        assert m["new_burn_auc_pr"] == pytest.approx(1.0)
+        # The ring is the closest unburned ring, so the distance baseline is perfect too
+        assert m["new_burn_distance_auc_pr"] == pytest.approx(1.0)

@@ -39,7 +39,11 @@ Coverage: **BC fire seasons 2012–2023**.
 | U-Net CNN | Spatial encoder-decoder | ≥ 5pp AUC-PR over RF |
 | ConvLSTM | Spatiotemporal (T=5 days history) | ≥ 5pp AUC-PR over U-Net |
 
-Primary metric: **AUC-PR** (appropriate for imbalanced burn/non-burn classes).
+Primary metric: **new-burn AUC-PR**, scored only on pixels not burned at day T. All-pixel AUC-PR rewards copying the day-T fire mask (persistence alone scores about 0.85), so every model is compared against persistence and a distance-to-fire baseline:
+
+```bash
+python scripts/evaluate_checkpoints.py --split test
+```
 
 ---
 
