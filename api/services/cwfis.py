@@ -4,14 +4,12 @@ CWFIS Fire Weather Index service.
 Fetches current FWI system values for BC weather stations from the
 Canadian Wildland Fire Information System public API.
 
-Fallback: returns a synthetic grid of BC FWI values based on typical
-fire season climatology when the live API is unavailable.
+Returns an empty FeatureCollection when the live API is unavailable.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 from datetime import date
 
 import httpx
@@ -25,15 +23,11 @@ CWFIS_STATIONS_URL = (
     "&yr={yr}&mo={mo}&day={da}"
 )
 
-# BC bounding box for synthetic fallback
-BC_LAT_RANGE = (49.0, 59.0)
-BC_LON_RANGE = (-139.0, -115.0)
-
 
 async def get_current_fwi() -> dict:
     """
     Fetch current CWFIS FWI station readings as GeoJSON.
-    Falls back to a synthetic grid if the API is unavailable.
+    Returns no stations if the API is unavailable.
     """
     today = date.today()
     url = CWFIS_STATIONS_URL.format(yr=today.year, mo=today.month, da=today.day)
@@ -77,9 +71,9 @@ async def get_current_fwi() -> dict:
             return {"type": "FeatureCollection", "features": features}
 
     except Exception as exc:
-        log.warning("CWFIS live API unavailable (%s) — using synthetic grid", type(exc).__name__)
+        log.warning("CWFIS live API unavailable (%s)", type(exc).__name__)
 
-    return _synthetic_fwi_grid()
+    return {"type": "FeatureCollection", "features": []}
 
 
 def _fwi_class(fwi: float) -> str:
@@ -89,46 +83,3 @@ def _fwi_class(fwi: float) -> str:
     if fwi < 30:  return "Very High"
     return "Extreme"
 
-
-def _synthetic_fwi_grid() -> dict:
-    """
-    Generate a 10×10 synthetic FWI grid over BC for display when live data
-    is unavailable. Values reflect typical mid-summer conditions.
-    Highest FWI in the BC Interior (historically most fire-prone).
-    """
-    features = []
-    lat_min, lat_max = BC_LAT_RANGE
-    lon_min, lon_max = BC_LON_RANGE
-
-    for i in range(10):
-        for j in range(10):
-            lat = lat_min + (lat_max - lat_min) * (i / 9)
-            lon = lon_min + (lon_max - lon_min) * (j / 9)
-            # Interior BC has higher FWI — use distance from coast proxy
-            coast_dist = (lon + 130) / 10   # 0 near coast, 1 in NE interior
-            lat_factor = 1 - abs(lat - 51) / 10  # peaks around 51°N
-            fwi = max(0, 18 * coast_dist * lat_factor + 5 + (i % 3) * 2)
-
-            features.append({
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [round(lon, 2), round(lat, 2)]},
-                "properties": {
-                    "station_id": f"synthetic_{i}_{j}",
-                    "station_name": "Synthetic",
-                    "FWI": round(fwi, 1),
-                    "fwi_class": _fwi_class(fwi),
-                    "FFMC": round(min(101, 70 + fwi * 0.8), 1),
-                    "DMC":  round(fwi * 2.5, 1),
-                    "DC":   round(fwi * 10, 1),
-                    "ISI":  round(fwi * 0.5, 1),
-                    "BUI":  round(fwi * 2.8, 1),
-                    "wind_speed": 20 + (i % 4) * 5,
-                    "wind_dir": (j * 36) % 360,
-                    "temp": 25 + (i % 5),
-                    "rh": 20 - (j % 5),
-                    "precip": 0.0,
-                    "is_synthetic": True,
-                },
-            })
-
-    return {"type": "FeatureCollection", "features": features}
