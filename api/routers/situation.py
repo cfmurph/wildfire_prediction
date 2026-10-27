@@ -1,9 +1,15 @@
-from fastapi import APIRouter
+import time
+from collections import deque
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from api.services import grok, predictor
 
 router = APIRouter()
+
+# Each report is a billed Grok call, so cap them across all users (per process).
+MAX_REPORTS_PER_HOUR = 60
+_recent_reports: deque[float] = deque()
 
 
 class SituationRequest(BaseModel):
@@ -29,6 +35,13 @@ async def situation_report(req: SituationRequest):
     Generate a Grok AI situation report + spread forecast for a fire.
     Combines the spread prediction with an NL briefing for emergency managers.
     """
+    now = time.monotonic()
+    while _recent_reports and now - _recent_reports[0] > 3600:
+        _recent_reports.popleft()
+    if len(_recent_reports) >= MAX_REPORTS_PER_HOUR:
+        raise HTTPException(429, "Situation report limit reached. Try again later.")
+    _recent_reports.append(now)
+
     # Get spread forecast
     spread = predictor.spread_forecast(
         lat=req.lat,

@@ -332,3 +332,19 @@ def test_situation_escapes_names_and_hides_provider_errors(client, monkeypatch):
     assert "super-secret-xai" not in failed.text
     assert "provider said" not in failed.text
     assert "temporarily unavailable" in failed.json()["report"]
+
+
+def test_situation_reports_are_capped_per_hour(client, monkeypatch):
+    from api.routers import situation
+
+    monkeypatch.setattr(situation, "MAX_REPORTS_PER_HOUR", 1)
+    monkeypatch.setattr(situation, "_recent_reports", situation.deque())
+    assert client.post("/api/v1/situation", json=_situation_body()).status_code == 200
+    assert client.post("/api/v1/situation", json=_situation_body()).status_code == 429
+
+
+def test_cors_allows_only_configured_origins(client):
+    allowed = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    blocked = client.get("/health", headers={"Origin": "https://evil.example"})
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "access-control-allow-origin" not in blocked.headers
