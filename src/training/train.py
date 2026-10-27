@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import random
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -37,7 +38,8 @@ from src.data.transforms import build_train_transforms, build_eval_transforms
 from src.models.losses import CombinedLoss
 from src.models.unet import build_unet
 from src.models.convlstm import build_convlstm
-from src.utils.metrics import compute_metrics
+from src.utils.config import CHANNELS
+from src.utils.metrics import compute_metrics, compute_spread_metrics
 from src.utils.visualization import plot_training_curves, spatial_confusion_map
 
 log = logging.getLogger(__name__)
@@ -127,9 +129,17 @@ def evaluate_epoch(
     n_batches = 0
     all_probs: list[np.ndarray] = []
     all_targets: list[np.ndarray] = []
+    all_prev: list[np.ndarray] = []
+
+    # PrevFireMask is 0/1 before z-scoring, so its normalised midpoint splits burned from unburned
+    k = CHANNELS.index("PrevFireMask")
+    stats = loader.dataset.stats
+    burned_above = (0.5 - stats.mean[k]) / stats.std[k]
 
     for batch in loader:
         X, y = batch
+        prev = X[:, -1, k] if X.dim() == 5 else X[:, k]   # last frame for sequences
+        all_prev.append((prev > burned_above).numpy())
         X = X.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
 
@@ -142,9 +152,10 @@ def evaluate_epoch(
         all_probs.append(probs)
         all_targets.append(y.cpu().numpy())
 
-    all_probs_np = np.concatenate([p.ravel() for p in all_probs])
-    all_targets_np = np.concatenate([t.ravel() for t in all_targets])
-    metrics = compute_metrics(all_targets_np, all_probs_np)
+    probs_np = np.concatenate(all_probs)
+    targets_np = np.concatenate(all_targets)
+    metrics = compute_metrics(targets_np, probs_np)
+    metrics.update(compute_spread_metrics(targets_np, probs_np, np.concatenate(all_prev)))
 
     return total_loss / max(n_batches, 1), metrics
 
@@ -162,8 +173,10 @@ def main(cfg: DictConfig) -> None:
 
     # ---- Seed ----
     seed = cfg.training.seed
+    random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
     # ---- Determine seq_len ----
     seq_len = getattr(cfg.data, "seq_len", 1)
@@ -225,7 +238,7 @@ def main(cfg: DictConfig) -> None:
     except Exception:
         git_sha = "unknown"
 
-    run_name = f"{cfg.model.name}-{datetime.date.today()}-{git_sha}"
+    run_name = f"{cfg.model.name}-{datetime.date.today()}-{git_sha}-s{seed}"
     if seq_mode:
         run_name += f"-T{seq_len}"
 
@@ -252,6 +265,7 @@ def main(cfg: DictConfig) -> None:
             "pos_weight": round(pos_weight, 2),
             "device": str(device),
             "git_sha": git_sha,
+            "seed": seed,
         })
 
         for epoch in range(1, cfg.training.epochs + 1):
@@ -264,7 +278,8 @@ def main(cfg: DictConfig) -> None:
                 val_loss, val_metrics = evaluate_epoch(
                     model, loaders["val"], criterion, device
                 )
-                val_auc_pr = val_metrics["auc_pr"]
+                # All-pixel AUC-PR rewards copying the day-T mask; select on new burn
+                val_auc_pr = float(np.nan_to_num(val_metrics["new_burn_auc_pr"]))
             else:
                 val_loss, val_metrics, val_auc_pr = train_loss, {}, 0.0
 
@@ -287,7 +302,7 @@ def main(cfg: DictConfig) -> None:
                 f"Epoch {epoch:03d}/{cfg.training.epochs}  "
                 f"train_loss={train_loss:.4f}  "
                 f"val_loss={val_loss:.4f}  "
-                f"val_auc_pr={val_auc_pr:.4f}"
+                f"val_new_burn_auc_pr={val_auc_pr:.4f}"
             )
 
             # Early stopping + best model checkpoint
@@ -295,7 +310,7 @@ def main(cfg: DictConfig) -> None:
                 best_val_auc_pr = val_auc_pr
                 patience_counter = 0
                 torch.save(model.state_dict(), best_ckpt)
-                log.info(f"  ✓ New best val AUC-PR={val_auc_pr:.4f} — checkpoint saved")
+                log.info(f"  ✓ New best val new-burn AUC-PR={val_auc_pr:.4f} — checkpoint saved")
             else:
                 patience_counter += 1
                 if patience_counter >= cfg.training.early_stopping_patience:
@@ -313,6 +328,8 @@ def main(cfg: DictConfig) -> None:
             mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
             log.info(
                 f"Test results:\n"
+                f"  New-burn AUC-PR = {test_metrics.get('new_burn_auc_pr', float('nan')):.4f}"
+                f"  (distance baseline {test_metrics.get('new_burn_distance_auc_pr', float('nan')):.4f})\n"
                 f"  AUC-PR  = {test_metrics.get('auc_pr', float('nan')):.4f}\n"
                 f"  AUC-ROC = {test_metrics.get('auc_roc', float('nan')):.4f}\n"
                 f"  F1      = {test_metrics.get('f1', float('nan')):.4f}\n"
