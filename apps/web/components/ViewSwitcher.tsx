@@ -9,17 +9,21 @@ const VIEWS: { id: View; label: string; icon: React.ElementType; description: st
   { id: "current",     label: "Current",     icon: Flame,      description: "Live hotspots + FWI" },
   { id: "history",     label: "History",     icon: Clock,      description: "BC fires 2006–2024" },
   { id: "predictions", label: "Predictions", icon: TrendingUp, description: "Next-day spread" },
-  { id: "risk",        label: "Risk",        icon: Map,        description: "Long-term likelihood" },
+  { id: "risk",        label: "Risk",        icon: Map,        description: "12-month forecast" },
 ];
+
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 interface Props {
   current: View;
   onChange: (v: View) => void;
   historyYear: number;
   onYearChange: (y: number) => void;
+  riskMonth: number;
+  onRiskMonthChange: (m: number) => void;
 }
 
-export default function ViewSwitcher({ current, onChange, historyYear, onYearChange }: Props) {
+export default function ViewSwitcher({ current, onChange, historyYear, onYearChange, riskMonth, onRiskMonthChange }: Props) {
   return (
     <div className="p-3 border-b border-gray-800 space-y-2">
       <div className="grid grid-cols-2 gap-1">
@@ -42,6 +46,46 @@ export default function ViewSwitcher({ current, onChange, historyYear, onYearCha
           </button>
         ))}
       </div>
+
+      {/* Month slider + layer toggle — Risk view */}
+      {current === "risk" && (
+        <div className="pt-1">
+          <div className="flex justify-between text-xs text-gray-400 mb-1">
+            <span>12-month forecast</span>
+            <span className="font-semibold text-orange-400">{MONTH_NAMES[riskMonth - 1]} 2027</span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={12}
+            value={riskMonth}
+            onChange={(e) => onRiskMonthChange(Number(e.target.value))}
+            className="w-full accent-orange-500 cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-gray-600 mt-0.5">
+            <span>Jan</span>
+            <span className="text-orange-500">🔥 Jul-Aug</span>
+            <span>Dec</span>
+          </div>
+          <div className="mt-1.5 grid grid-cols-12 gap-px">
+            {MONTH_NAMES.map((m, i) => (
+              <button
+                key={m}
+                onClick={() => onRiskMonthChange(i + 1)}
+                className={`text-[8px] py-0.5 rounded transition-colors ${
+                  riskMonth === i + 1
+                    ? "bg-orange-600 text-white"
+                    : [5,6,7,8,9].includes(i + 1)
+                    ? "bg-orange-900/40 text-orange-300 hover:bg-orange-800/40"
+                    : "bg-gray-800 text-gray-500 hover:bg-gray-700"
+                }`}
+              >
+                {m[0]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Year slider — only shown for History view */}
       {current === "history" && (

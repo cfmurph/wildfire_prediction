@@ -4,6 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import ViewSwitcher, { View } from "@/components/ViewSwitcher";
 import FirePanel from "@/components/FirePanel";
+import RiskPanel from "@/components/RiskPanel";
 import Header from "@/components/Header";
 
 // MapLibre needs to be client-side only (no SSR)
@@ -33,7 +34,10 @@ export type SelectedFire = {
 export default function Home() {
   const [view, setView] = useState<View>("current");
   const [historyYear, setHistoryYear] = useState(2023);
+  const [riskMonth, setRiskMonth] = useState(new Date().getMonth() + 1);
   const [selectedFire, setSelectedFire] = useState<SelectedFire | null>(null);
+  const [riskLayers, setRiskLayers] = useState({ lightning: true, human: true });
+  const [riskClickedPoint, setRiskClickedPoint] = useState<{ lat: number; lon: number } | null>(null);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -46,9 +50,19 @@ export default function Home() {
             onChange={setView}
             historyYear={historyYear}
             onYearChange={setHistoryYear}
+            riskMonth={riskMonth}
+            onRiskMonthChange={setRiskMonth}
           />
           <div className="flex-1 overflow-y-auto sidebar-scroll">
-            <FirePanel fire={selectedFire} view={view} />
+            {view === "risk" ? (
+              <RiskPanel
+                month={riskMonth}
+                onLayerToggle={setRiskLayers}
+                clickedPoint={riskClickedPoint}
+              />
+            ) : (
+              <FirePanel fire={selectedFire} view={view} />
+            )}
           </div>
         </aside>
 
@@ -57,8 +71,11 @@ export default function Home() {
           <WildfireMap
             view={view}
             historyYear={historyYear}
+            riskMonth={riskMonth}
+            riskLayers={riskLayers}
             onFireSelect={setSelectedFire}
             selectedFire={selectedFire}
+            onRiskPointClick={setRiskClickedPoint}
           />
         </main>
       </div>
