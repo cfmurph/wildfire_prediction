@@ -65,7 +65,7 @@ async def get_hotspots_geojson(days: int = 1) -> dict:
         try:
             async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.get(url)
-                if resp.ok:
+                if resp.is_success:
                     partial = pd.read_csv(io.StringIO(resp.text))
                     if not partial.empty:
                         partial["satellite_source"] = source
