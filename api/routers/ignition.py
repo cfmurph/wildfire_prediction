@@ -68,7 +68,7 @@ async def ignition_monthly(
     Features used: lightning density, human activity density, FWI climatology,
     location (coast vs interior gradient), and seasonality.
     """
-    model, clim, densities = _load_resources()
+    model, clim, densities, _ = _load_resources()
 
     if model is None:
         # Return synthetic climatology as fallback
@@ -95,7 +95,7 @@ async def ignition_causes(
     Return separate lightning-caused and human-caused ignition probability grids.
     Allows the UI to show two overlapping layers with different colours.
     """
-    model, clim, densities = _load_resources()
+    model, clim, densities, _ = _load_resources()
     if model is None:
         return {"lightning": {"type": "FeatureCollection", "features": []},
                 "human": {"type": "FeatureCollection", "features": []}}
