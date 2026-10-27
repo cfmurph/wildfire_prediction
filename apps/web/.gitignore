@@ -4,3 +4,6 @@ out
 .vercel
 .env.local
 *.tsbuildinfo
+test-results/
+playwright-report/
+blob-report/

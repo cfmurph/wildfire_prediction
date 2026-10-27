@@ -77,7 +77,7 @@ async def get_current_fwi() -> dict:
             return {"type": "FeatureCollection", "features": features}
 
     except Exception as exc:
-        log.warning(f"CWFIS live API unavailable: {exc} — using synthetic grid")
+        log.warning("CWFIS live API unavailable (%s) — using synthetic grid", type(exc).__name__)
 
     return _synthetic_fwi_grid()
 

@@ -10,9 +10,9 @@ BC bounding box: lon -139 to -114, lat 48 to 60
 from __future__ import annotations
 
 import io
+import math
 import os
 import logging
-from typing import Optional
 
 import httpx
 import pandas as pd
@@ -20,6 +20,8 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 BC_BBOX = "-139,48,-114,60"
+BC_LON_MIN, BC_LON_MAX = -139.0, -114.0
+BC_LAT_MIN, BC_LAT_MAX = 48.0, 60.0
 FIRMS_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 
 # Suomi NPP VIIRS is being retired November 1, 2026.
@@ -77,21 +79,24 @@ async def get_hotspots_geojson(days: int = 1) -> dict:
         log.error(f"FIRMS merge failed: {exc}")
         return _empty_fc()
 
-    if df.empty:
+    if df.empty or "latitude" not in df.columns or "longitude" not in df.columns:
         return _empty_fc()
 
     features = []
     for _, row in df.iterrows():
+        lat = _finite(row.get("latitude"))
+        lon = _finite(row.get("longitude"))
+        if lat is None or lon is None:
+            continue
+        if not (BC_LAT_MIN <= lat <= BC_LAT_MAX and BC_LON_MIN <= lon <= BC_LON_MAX):
+            continue
         features.append({
             "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [float(row.get("longitude", 0)), float(row.get("latitude", 0))],
-            },
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
             "properties": {
-                "bright_ti4": float(row.get("bright_ti4", 0)),
-                "bright_ti5": float(row.get("bright_ti5", 0)),
-                "frp": float(row.get("frp", 0)),
+                "bright_ti4": _or_zero(row.get("bright_ti4")),
+                "bright_ti5": _or_zero(row.get("bright_ti5")),
+                "frp": _or_zero(row.get("frp")),
                 "confidence": str(row.get("confidence", "")),
                 "acq_date": str(row.get("acq_date", "")),
                 "acq_time": str(row.get("acq_time", "")),
@@ -101,6 +106,21 @@ async def get_hotspots_geojson(days: int = 1) -> dict:
         })
 
     return {"type": "FeatureCollection", "features": features}
+
+
+def _finite(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return number
+
+
+def _or_zero(value: object) -> float:
+    number = _finite(value)
+    return 0.0 if number is None else number
 
 
 def _empty_fc() -> dict:

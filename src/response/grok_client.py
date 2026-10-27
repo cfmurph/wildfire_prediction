@@ -146,7 +146,8 @@ def build_fire_payload(
 def _degrees_to_compass(deg: float) -> str:
     """Convert wind direction in degrees to compass label."""
     directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-    idx = round(deg / 45) % 8
+    # Half-up. Python's round() uses banker's rounding, so 22.5° became N.
+    idx = int((float(deg) % 360.0) / 45.0 + 0.5) % 8
     return directions[idx]
 
 
@@ -335,11 +336,19 @@ Answer concisely and factually based only on the data provided above."""
                 return response.choices[0].message.content.strip()
             except Exception as exc:
                 last_exc = exc
-                log.warning(f"Grok API attempt {attempt}/{self.max_retries} failed: {exc}")
+                # The exception text can include the request, and therefore the API key.
+                log.warning(
+                    "Grok API attempt %s/%s failed (%s)",
+                    attempt,
+                    self.max_retries,
+                    type(exc).__name__,
+                )
                 if attempt < self.max_retries:
                     time.sleep(2 ** attempt)   # exponential backoff
 
-        raise RuntimeError(f"Grok API failed after {self.max_retries} attempts: {last_exc}")
+        raise RuntimeError(
+            f"Grok API failed after {self.max_retries} attempts ({type(last_exc).__name__})"
+        ) from last_exc
 
     def _serialise_payload(self, payload: FirePayload) -> dict:
         """Convert FirePayload dataclass to a JSON-serialisable dict."""
