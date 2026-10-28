@@ -409,8 +409,8 @@ def download_fwi_zenodo(
     Uses the overwintered DC version (recommended for western Canada).
     Coverage: 1979–2018 (daily, global, NetCDF).
 
-    For years > 2018 (i.e., 2019–2023 test split), fall back to CWFIS
-    operational data (see download_cwfis_fwi).
+    Used only for the API's FWI climatology; patch channels come from
+    download_fwi_cems, which covers every year.
 
     Variables: FFMC, DMC, DC, ISI, BUI, FWI (DSR optional)
     """
