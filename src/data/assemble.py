@@ -21,6 +21,7 @@ training signal while still requiring weighted loss.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from dataclasses import asdict, dataclass
@@ -580,11 +581,9 @@ class PatchExtractor:
                     fwi_val = float(reproject_to_patch_grid(fwi_path, transform, OUTPUT_CRS, shape).mean())
                 if isi_path and isi_path.suffix == ".tif":
                     isi_val = float(reproject_to_patch_grid(isi_path, transform, OUTPUT_CRS, shape).mean())
-                era5_paths = self._find_era5(date.strftime("%Y-%m-%d"))
-                if era5_paths:
-                    ed = self._load_era5_patch(era5_paths[0], transform, shape, date_str=date.strftime("%Y-%m-%d"))
-                    if "wind_speed" in ed: wspd_val = float(ed["wind_speed"].mean())
-                    if "wind_dir" in ed:   wdir_val = float(ed["wind_dir"].mean())
+                ed = self._load_era5_patch(date.strftime("%Y-%m-%d"), transform, shape)
+                if "wind_speed" in ed: wspd_val = float(ed["wind_speed"].mean())
+                if "wind_dir" in ed:   wdir_val = float(ed["wind_dir"].mean())
             except Exception:
                 pass
             fwi_series.append(fwi_val)
@@ -671,16 +670,8 @@ class PatchExtractor:
             X[ch["aspect"]] = aspect
 
         # --- ERA5 weather ---
-        era5_paths = self._find_era5(date_str)
-        if era5_paths:
-            instant_path, accum_path = era5_paths
-            era5_data = self._load_era5_patch(instant_path, transform, shape, date_str=date_str)
-            if accum_path != instant_path:
-                accum_data = self._load_era5_patch(accum_path, transform, shape, date_str=date_str)
-                era5_data.update({k: v for k, v in accum_data.items() if k not in era5_data})
-            for var_name in ["wind_dir", "wind_speed", "temp_min", "temp_max", "humidity", "precip"]:
-                if var_name in era5_data:
-                    X[ch[var_name]] = era5_data[var_name]
+        for var_name, arr in self._load_era5_patch(date_str, transform, shape).items():
+            X[ch[var_name]] = arr
 
         # --- FWI system ---
         for fwi_var in ["FFMC", "DMC", "DC", "ISI", "BUI", "FWI"]:
@@ -717,28 +708,6 @@ class PatchExtractor:
     # File finders
     # ------------------------------------------------------------------
 
-    def _find_era5(self, date_str: str) -> Optional[tuple[Path, Path]]:
-        """
-        Return (instant_path, accum_path) for the given date's ERA5 data.
-
-        Instant file: u10, v10, t2m, d2m (wind, temperature, dewpoint)
-        Accum  file:  tp                   (total precipitation)
-
-        Returns None if no ERA5 data found for this date.
-        """
-        year = date_str[:4]
-        instant = self.era5_dir / f"era5_{year}_instant.nc"
-        accum = self.era5_dir / f"era5_{year}_accum.nc"
-
-        # Prefer split files
-        if instant.exists() and accum.exists():
-            return instant, accum
-        # Fallback: legacy single file (only has accum variables)
-        legacy = self.era5_dir / f"era5_{year}_data.nc"
-        if legacy.exists():
-            return legacy, legacy
-        return None
-
     def _find_fwi(self, date_str: str, variable: str) -> Optional[Path]:
         """Return path to CWFIS FWI GeoTIFF for the given date and variable."""
         date_nodash = date_str.replace("-", "")
@@ -767,86 +736,55 @@ class PatchExtractor:
                 continue
         return best if best_delta <= 16 else None
 
-    def _load_era5_patch(
-        self,
-        era5_path: Path,
-        transform: rasterio.transform.Affine,
-        shape: tuple[int, int],
-        date_str: Optional[str] = None,
-    ) -> dict[str, np.ndarray]:
+    @functools.lru_cache(maxsize=256)
+    def _era5_day(self, date_str: str) -> dict:
         """
-        Load ERA5 variables from a NetCDF file, compute derived fields,
-        and reproject to patch grid.
-
-        ERA5 variables used:
-          u10, v10  → wind_dir (degrees), wind_speed (m/s)
-          t2m       → temp_min, temp_max (°C) — uses daily min/max if available
-          d2m       → dewpoint → relative humidity (%)
-          tp        → total precipitation (mm)
-
-        Returns dict mapping channel name → (H, W) float32 array.
+        BC-wide ERA5 fields for one local day (PDT, UTC-7) from the hourly
+        monthly files: min/max temperature, minimum relative humidity,
+        16:00 wind, and 24 h precipitation. Empty if the files are missing.
         """
         import xarray as xr
 
-        ds = xr.open_dataset(era5_path)
-        result: dict[str, np.ndarray] = {}
+        start = pd.Timestamp(date_str) + pd.Timedelta(hours=7)  # 00:00 PDT
+        end = start + pd.Timedelta(hours=23)
+        months = sorted({start.strftime("%Y_%m"), end.strftime("%Y_%m")})
 
-        # Select the specific date from the multi-day file
-        # ERA5 CDS downloads have valid_time dimension (one step per day at noon)
-        time_dim = "valid_time" if "valid_time" in ds.dims else "time"
-        if time_dim in ds.dims and ds.dims[time_dim] > 1:
-            if date_str is not None:
-                try:
-                    target = np.datetime64(date_str + "T12:00:00")
-                    ds = ds.sel({time_dim: target}, method="nearest")
-                except Exception:
-                    ds = ds.isel({time_dim: 0})
-            else:
-                ds = ds.mean(dim=time_dim)
-
-        def _get(var: str) -> Optional[np.ndarray]:
-            if var not in ds:
+        def _open(kind: str):
+            paths = [self.era5_dir / f"era5_{m}_hourly_{kind}.nc" for m in months]
+            paths = [p for p in paths if p.exists()]
+            if not paths:
                 return None
-            arr = ds[var].values
-            if arr.ndim > 2:
-                arr = arr.squeeze()
-            if arr.ndim > 2:
-                arr = arr[0]  # take first remaining time step
-            return arr.astype(np.float32)
+            return xr.concat([xr.open_dataset(p) for p in paths], dim="valid_time").sel(valid_time=slice(start, end))
 
-        # Wind — derive speed and direction from u/v components
-        u_arr = _get("u10")
-        v_arr = _get("v10")
-        if u_arr is not None and v_arr is not None:
-            speed = np.sqrt(u_arr**2 + v_arr**2)
-            direction = (np.degrees(np.arctan2(-u_arr, -v_arr)) % 360).astype(np.float32)
-            result["wind_speed"] = self._regrid_numpy(speed, ds, transform, shape)
-            result["wind_dir"] = self._regrid_numpy(direction, ds, transform, shape)
+        inst, accum = _open("instant"), _open("accum")
+        if inst is None or accum is None:
+            return {}
 
-        # Temperature
-        t_arr = _get("t2m")
-        if t_arr is not None:
-            t_c = t_arr - 273.15
-            result["temp_max"] = self._regrid_numpy(t_c, ds, transform, shape)
-            result["temp_min"] = self._regrid_numpy(t_c, ds, transform, shape)
+        t = inst["t2m"] - 273.15
+        td = inst["d2m"] - 273.15
+        rh = 100.0 * np.exp(17.625 * td / (243.04 + td)) / np.exp(17.625 * t / (243.04 + t))
+        afternoon = inst.sel(valid_time=start + pd.Timedelta(hours=16))
+        u, v = afternoon["u10"], afternoon["v10"]
+        return {
+            "temp_max": t.max("valid_time"),
+            "temp_min": t.min("valid_time"),
+            "humidity": rh.min("valid_time"),
+            "wind_speed": np.sqrt(u**2 + v**2),
+            "wind_dir": np.degrees(np.arctan2(-u, -v)) % 360,
+            "precip": accum["tp"].sum("valid_time") * 1000.0,  # m → mm
+        }
 
-        # Relative humidity from dewpoint
-        td_arr = _get("d2m")
-        if td_arr is not None and t_arr is not None:
-            t_c2 = t_arr - 273.15
-            td_c = td_arr - 273.15
-            rh = 100.0 * np.exp((17.625 * td_c) / (243.04 + td_c)) / np.exp(
-                (17.625 * t_c2) / (243.04 + t_c2)
-            )
-            result["humidity"] = self._regrid_numpy(rh.astype(np.float32), ds, transform, shape)
-
-        # Precipitation (m → mm)
-        tp_arr = _get("tp")
-        if tp_arr is not None:
-            result["precip"] = self._regrid_numpy((tp_arr * 1000.0).astype(np.float32), ds, transform, shape)
-
-        ds.close()
-        return result
+    def _load_era5_patch(
+        self,
+        date_str: str,
+        transform: rasterio.transform.Affine,
+        shape: tuple[int, int],
+    ) -> dict[str, np.ndarray]:
+        """ERA5 daily fields for date_str, regridded to the patch grid."""
+        return {
+            name: self._regrid_numpy(arr.values.astype(np.float32), arr, transform, shape)
+            for name, arr in self._era5_day(date_str).items()
+        }
 
     def _regrid_numpy(
         self,

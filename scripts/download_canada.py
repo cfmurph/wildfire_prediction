@@ -32,11 +32,13 @@ Notes
 from __future__ import annotations
 
 import argparse
+import itertools
 import logging
 import os
 import sys
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -297,7 +299,9 @@ def download_firms_hotspots(
 
 def download_era5(dest_dir: Path, years: list[int]) -> None:
     """
-    Download daily ERA5 surface variables for BC from the Copernicus CDS.
+    Download hourly ERA5 surface variables for BC from the Copernicus CDS.
+    Assembly aggregates them to local-day values (min/max temperature,
+    afternoon wind and humidity, 24 h precipitation).
 
     Variables:
       - 10m_u_component_of_wind  (u10)
@@ -308,7 +312,7 @@ def download_era5(dest_dir: Path, years: list[int]) -> None:
 
     Requires ~/.cdsapirc with UID and API key from https://cds.climate.copernicus.eu
 
-    Format: NetCDF, one file per year-month
+    Format: NetCDF, era5_YYYY_MM_hourly_{instant,accum}.nc
     """
     log.info("=== ERA5 weather reanalysis ===")
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -327,45 +331,61 @@ def download_era5(dest_dir: Path, years: list[int]) -> None:
         )
         return
 
-    c = cdsapi.Client(quiet=True)
     bb = BC_BBOX
 
     fire_months = [str(m).zfill(2) for m in range(4, 11)]  # April–October
 
-    for year in years:
-        out = dest_dir / f"era5_{year}.nc"
-        if out.exists():
-            log.info(f"  already exists: {out.name}")
-            continue
+    # Instant and accumulated variables come back as separate files, so request them separately
+    requests_by_kind = {
+        "instant": [
+            "10m_u_component_of_wind",
+            "10m_v_component_of_wind",
+            "2m_temperature",
+            "2m_dewpoint_temperature",
+        ],
+        "accum": ["total_precipitation"],
+    }
 
-        log.info(f"  Requesting ERA5 {year} (fire season months Apr–Oct)…")
+    # A full season of hourly fields exceeds the CDS request limit, so go month by month.
+    # Each request waits in the CDS queue for up to ~1.5 h, so submit them concurrently.
+    jobs = [
+        (year, month, kind, variables)
+        for year in years
+        for month, (kind, variables) in itertools.product(fire_months, requests_by_kind.items())
+        if not (dest_dir / f"era5_{year}_{month}_hourly_{kind}.nc").exists()
+    ]
+
+    def fetch(job) -> None:
+        year, month, kind, variables = job
+        out = dest_dir / f"era5_{year}_{month}_hourly_{kind}.nc"
+        part = out.with_suffix(".part")
+        log.info(f"  Requesting ERA5 {year}-{month} hourly {kind}…")
         try:
-            c.retrieve(
+            cdsapi.Client(quiet=True, progress=False).retrieve(
                 "reanalysis-era5-single-levels",
                 {
-                    "product_type": "reanalysis",
-                    "variable": [
-                        "10m_u_component_of_wind",
-                        "10m_v_component_of_wind",
-                        "2m_temperature",
-                        "2m_dewpoint_temperature",
-                        "total_precipitation",
-                    ],
-                    "year": str(year),
-                    "month": fire_months,
+                    "product_type": ["reanalysis"],
+                    "variable": variables,
+                    "year": [str(year)],
+                    "month": [month],
                     "day": [str(d).zfill(2) for d in range(1, 32)],
-                    "time": "12:00",     # daily noon snapshot
+                    "time": [f"{h:02d}:00" for h in range(24)],
                     "area": [
                         bb["lat_max"], bb["lon_min"],
                         bb["lat_min"], bb["lon_max"],
                     ],
-                    "format": "netcdf",
+                    "data_format": "netcdf",
+                    "download_format": "unarchived",
                 },
-                str(out),
+                str(part),
             )
+            part.rename(out)
             log.info(f"  Saved → {out}")
         except Exception as exc:
-            log.error(f"  ERA5 {year} failed: {exc}")
+            log.error(f"  ERA5 {year}-{month} {kind} failed: {exc}")
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(fetch, jobs))
 
 
 # ---------------------------------------------------------------------------
