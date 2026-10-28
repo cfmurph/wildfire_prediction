@@ -151,6 +151,12 @@ OUTPUT_CRS = CRS.from_epsg(3005)
 # Patch extent in metres at 1 km resolution
 PATCH_EXTENT_M = PATCH_SIZE * TARGET_RESOLUTION_M  # 64 000 m = 64 km
 
+# Channel name → variable name in the CEMS fire danger NetCDF (fwi/cems_fwi_YYYY.nc)
+CEMS_FWI_VARS = {
+    "FFMC": "ffmcode", "DMC": "dufmcode", "DC": "drtcode",
+    "ISI": "infsinx", "BUI": "buinx", "FWI": "fwinx",
+}
+
 # Buffer around fire perimeter edge for patch sampling (metres)
 PATCH_BUFFER_M = 5_000   # 5 km beyond active perimeter
 
@@ -575,12 +581,9 @@ class PatchExtractor:
         for date in date_range:
             fwi_val, isi_val, wdir_val, wspd_val = 15.0, 6.0, 270.0, 4.0
             try:
-                fwi_path = self._find_fwi(date.strftime("%Y-%m-%d"), "FWI")
-                isi_path = self._find_fwi(date.strftime("%Y-%m-%d"), "ISI")
-                if fwi_path and fwi_path.suffix == ".tif":
-                    fwi_val = float(reproject_to_patch_grid(fwi_path, transform, OUTPUT_CRS, shape).mean())
-                if isi_path and isi_path.suffix == ".tif":
-                    isi_val = float(reproject_to_patch_grid(isi_path, transform, OUTPUT_CRS, shape).mean())
+                fd = self._load_fwi_patch(date.strftime("%Y-%m-%d"), transform, shape)
+                if "FWI" in fd: fwi_val = float(fd["FWI"].mean())
+                if "ISI" in fd: isi_val = float(fd["ISI"].mean())
                 ed = self._load_era5_patch(date.strftime("%Y-%m-%d"), transform, shape)
                 if "wind_speed" in ed: wspd_val = float(ed["wind_speed"].mean())
                 if "wind_dir" in ed:   wdir_val = float(ed["wind_dir"].mean())
@@ -674,12 +677,8 @@ class PatchExtractor:
             X[ch[var_name]] = arr
 
         # --- FWI system ---
-        for fwi_var in ["FFMC", "DMC", "DC", "ISI", "BUI", "FWI"]:
-            fwi_path = self._find_fwi(date_str, fwi_var)
-            if fwi_path and fwi_path.exists():
-                X[ch[fwi_var]] = reproject_to_patch_grid(
-                    fwi_path, transform, OUTPUT_CRS, shape
-                )
+        for var_name, arr in self._load_fwi_patch(date_str, transform, shape).items():
+            X[ch[var_name]] = arr
 
         # --- NDVI (16-day composites — use most recent available) ---
         ndvi_path = self._find_ndvi(date_str)
@@ -708,18 +707,6 @@ class PatchExtractor:
     # File finders
     # ------------------------------------------------------------------
 
-    def _find_fwi(self, date_str: str, variable: str) -> Optional[Path]:
-        """Return path to CWFIS FWI GeoTIFF for the given date and variable."""
-        date_nodash = date_str.replace("-", "")
-        candidates = [
-            self.fwi_dir / f"{variable}_{date_nodash}.tif",
-            self.fwi_dir / date_str[:4] / f"{variable}_{date_nodash}.tif",
-        ]
-        for p in candidates:
-            if p.exists():
-                return p
-        return None
-
     def _find_ndvi(self, date_str: str) -> Optional[Path]:
         """Return the MODIS NDVI composite covering date_str (±16 days)."""
         target = pd.Timestamp(date_str)
@@ -739,18 +726,17 @@ class PatchExtractor:
     @functools.lru_cache(maxsize=256)
     def _era5_day(self, date_str: str) -> dict:
         """
-        BC-wide ERA5 fields for one local day (PDT, UTC-7) from the hourly
-        monthly files: min/max temperature, minimum relative humidity,
+        BC-wide ERA5 fields for one local day (PDT, UTC-7) from the yearly
+        sub-daily files: min/max temperature, minimum relative humidity,
         16:00 wind, and 24 h precipitation. Empty if the files are missing.
         """
         import xarray as xr
 
         start = pd.Timestamp(date_str) + pd.Timedelta(hours=7)  # 00:00 PDT
         end = start + pd.Timedelta(hours=23)
-        months = sorted({start.strftime("%Y_%m"), end.strftime("%Y_%m")})
 
         def _open(kind: str):
-            paths = [self.era5_dir / f"era5_{m}_hourly_{kind}.nc" for m in months]
+            paths = [self.era5_dir / f"era5_{y}_hourly_{kind}.nc" for y in sorted({start.year, end.year})]
             paths = [p for p in paths if p.exists()]
             if not paths:
                 return None
@@ -764,13 +750,12 @@ class PatchExtractor:
         td = inst["d2m"] - 273.15
         rh = 100.0 * np.exp(17.625 * td / (243.04 + td)) / np.exp(17.625 * t / (243.04 + t))
         afternoon = inst.sel(valid_time=start + pd.Timedelta(hours=16))
-        u, v = afternoon["u10"], afternoon["v10"]
         return {
             "temp_max": t.max("valid_time"),
             "temp_min": t.min("valid_time"),
             "humidity": rh.min("valid_time"),
-            "wind_speed": np.sqrt(u**2 + v**2),
-            "wind_dir": np.degrees(np.arctan2(-u, -v)) % 360,
+            "u10": afternoon["u10"],
+            "v10": afternoon["v10"],
             "precip": accum["tp"].sum("valid_time") * 1000.0,  # m → mm
         }
 
@@ -781,9 +766,43 @@ class PatchExtractor:
         shape: tuple[int, int],
     ) -> dict[str, np.ndarray]:
         """ERA5 daily fields for date_str, regridded to the patch grid."""
-        return {
+        fields = {
             name: self._regrid_numpy(arr.values.astype(np.float32), arr, transform, shape)
             for name, arr in self._era5_day(date_str).items()
+        }
+        # Regrid wind as components; interpolating direction breaks across 360° → 0°
+        if "u10" in fields:
+            u, v = fields.pop("u10"), fields.pop("v10")
+            fields["wind_speed"] = np.hypot(u, v)
+            fields["wind_dir"] = (np.degrees(np.arctan2(-u, -v)) % 360).astype(np.float32)
+        return fields
+
+    @functools.lru_cache(maxsize=256)
+    def _fwi_day(self, date_str: str) -> dict:
+        """BC-wide CEMS FWI indices for one day. Empty if the year's file or the day is missing."""
+        import xarray as xr
+
+        path = self.fwi_dir / f"cems_fwi_{date_str[:4]}.nc"
+        if not path.exists():
+            return {}
+        ds = xr.open_dataset(path)
+        day = pd.Timestamp(date_str)
+        if day not in ds.indexes["valid_time"]:
+            return {}
+        # CEMS longitudes run 0–360; the regridder expects -180–180
+        day_ds = ds.sel(valid_time=day).assign_coords(longitude=ds.longitude - 360.0)
+        return {name: day_ds[var] for name, var in CEMS_FWI_VARS.items()}
+
+    def _load_fwi_patch(
+        self,
+        date_str: str,
+        transform: rasterio.transform.Affine,
+        shape: tuple[int, int],
+    ) -> dict[str, np.ndarray]:
+        """FWI indices for date_str, regridded to the patch grid."""
+        return {
+            name: self._regrid_numpy(arr.values.astype(np.float32), arr, transform, shape)
+            for name, arr in self._fwi_day(date_str).items()
         }
 
     def _regrid_numpy(
