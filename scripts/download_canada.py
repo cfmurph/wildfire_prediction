@@ -525,9 +525,9 @@ def download_fwi_cems(dest_dir: Path, years: list[int]) -> None:
         except Exception as exc:
             log.error(f"  CEMS FWI {year} failed: {exc}")
 
-    # Requests queue for hours and the store rejects more than a couple per user
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(fetch, jobs))
+    # The store rejects a second queued request per user, so strictly one at a time
+    for year in jobs:
+        fetch(year)
 
 
 # ---------------------------------------------------------------------------
