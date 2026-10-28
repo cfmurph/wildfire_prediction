@@ -154,7 +154,7 @@ PATCH_EXTENT_M = PATCH_SIZE * TARGET_RESOLUTION_M  # 64 000 m = 64 km
 # Channel name → variable name in the CEMS fire danger NetCDF (fwi/cems_fwi_YYYY.nc)
 CEMS_FWI_VARS = {
     "FFMC": "ffmcode", "DMC": "dufmcode", "DC": "drtcode",
-    "ISI": "infsinx", "BUI": "buinx", "FWI": "fwinx",
+    "ISI": "infsinx", "BUI": "fbupinx", "FWI": "fwinx",
 }
 
 # Buffer around fire perimeter edge for patch sampling (metres)
