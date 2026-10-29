@@ -581,12 +581,16 @@ class PatchExtractor:
         for date in date_range:
             fwi_val, isi_val, wdir_val, wspd_val = 15.0, 6.0, 270.0, 4.0
             try:
-                fd = self._load_fwi_patch(date.strftime("%Y-%m-%d"), transform, shape)
-                if "FWI" in fd: fwi_val = float(fd["FWI"].mean())
-                if "ISI" in fd: isi_val = float(fd["ISI"].mean())
-                ed = self._load_era5_patch(date.strftime("%Y-%m-%d"), transform, shape)
-                if "wind_speed" in ed: wspd_val = float(ed["wind_speed"].mean())
-                if "wind_dir" in ed:   wdir_val = float(ed["wind_dir"].mean())
+                # A 64 km patch spans ~2 cells of these 0.25° grids, so the centre value stands in for the patch
+                at_centre = lambda arr: float(arr.sel(latitude=lat, longitude=lon, method="nearest"))
+                fd = self._fwi_day(date.strftime("%Y-%m-%d"))
+                if fd:
+                    fwi_val, isi_val = at_centre(fd["FWI"]), at_centre(fd["ISI"])
+                ed = self._era5_day(date.strftime("%Y-%m-%d"))
+                if ed:
+                    u, v = at_centre(ed["u10"]), at_centre(ed["v10"])
+                    wspd_val = float(np.hypot(u, v))
+                    wdir_val = float(np.degrees(np.arctan2(-u, -v)) % 360)
             except Exception:
                 pass
             fwi_series.append(fwi_val)
@@ -643,7 +647,7 @@ class PatchExtractor:
                 centre_x=round(cx, 1), centre_y=round(cy, 1),
                 n_burn_pixels=int(next_mask.sum()),
                 n_total_pixels=int(next_mask.size),
-                burn_fraction=round(next_mask.sum() / max(next_mask.size, 1), 4),
+                burn_fraction=round(float(next_mask.sum()) / max(next_mask.size, 1), 4),  # float32 breaks json.dump
             )
 
     def _build_patch_channels(
@@ -723,6 +727,14 @@ class PatchExtractor:
                 continue
         return best if best_delta <= 16 else None
 
+    @staticmethod
+    @functools.lru_cache(maxsize=4)
+    def _load_year_nc(path: Path):
+        """A year's NetCDF held in memory (~250 MB); lazy reads re-scan the file for every day."""
+        import xarray as xr
+
+        return xr.load_dataset(path) if path.exists() else None
+
     @functools.lru_cache(maxsize=256)
     def _era5_day(self, date_str: str) -> dict:
         """
@@ -730,21 +742,13 @@ class PatchExtractor:
         sub-daily files: min/max temperature, minimum relative humidity,
         16:00 wind, and 24 h precipitation. Empty if the files are missing.
         """
-        import xarray as xr
-
         start = pd.Timestamp(date_str) + pd.Timedelta(hours=7)  # 00:00 PDT
-        end = start + pd.Timedelta(hours=23)
-
-        def _open(kind: str):
-            paths = [self.era5_dir / f"era5_{y}_hourly_{kind}.nc" for y in sorted({start.year, end.year})]
-            paths = [p for p in paths if p.exists()]
-            if not paths:
-                return None
-            return xr.concat([xr.open_dataset(p) for p in paths], dim="valid_time").sel(valid_time=slice(start, end))
-
-        inst, accum = _open("instant"), _open("accum")
+        end = start + pd.Timedelta(hours=23)  # still in the same year: seasons end 31 Oct
+        inst, accum = (self._load_year_nc(self.era5_dir / f"era5_{start.year}_hourly_{kind}.nc")
+                       for kind in ("instant", "accum"))
         if inst is None or accum is None:
             return {}
+        inst, accum = inst.sel(valid_time=slice(start, end)), accum.sel(valid_time=slice(start, end))
 
         t = inst["t2m"] - 273.15
         td = inst["d2m"] - 273.15
@@ -780,14 +784,9 @@ class PatchExtractor:
     @functools.lru_cache(maxsize=256)
     def _fwi_day(self, date_str: str) -> dict:
         """BC-wide CEMS FWI indices for one day. Empty if the year's file or the day is missing."""
-        import xarray as xr
-
-        path = self.fwi_dir / f"cems_fwi_{date_str[:4]}.nc"
-        if not path.exists():
-            return {}
-        ds = xr.open_dataset(path)
+        ds = self._load_year_nc(self.fwi_dir / f"cems_fwi_{date_str[:4]}.nc")
         day = pd.Timestamp(date_str)
-        if day not in ds.indexes["valid_time"]:
+        if ds is None or day not in ds.indexes["valid_time"]:
             return {}
         # CEMS longitudes run 0–360; the regridder expects -180–180
         day_ds = ds.sel(valid_time=day).assign_coords(longitude=ds.longitude - 360.0)
