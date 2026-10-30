@@ -799,10 +799,12 @@ class PatchExtractor:
         shape: tuple[int, int],
     ) -> dict[str, np.ndarray]:
         """FWI indices for date_str, regridded to the patch grid."""
-        return {
+        patches = {
             name: self._regrid_numpy(arr.values.astype(np.float32), arr, transform, shape)
             for name, arr in self._fwi_day(date_str).items()
         }
+        # CEMS is NaN over ocean; coastal patches take the mean of their land pixels
+        return {name: np.where(np.isnan(a), np.nanmean(a), a) for name, a in patches.items()}
 
     def _regrid_numpy(
         self,
