@@ -19,15 +19,17 @@ Assembled from open Canadian government and scientific sources:
 | Layer | Source | Resolution |
 |---|---|---|
 | Fire perimeters | BC Wildfire Service / Open Gov BC | Vector |
-| Active hotspots | CWFIS / NASA FIRMS | 375 m |
 | Weather (ERA5) | Copernicus CDS | ~28 km |
-| Fire Weather Index | CWFIS | ~10 km |
-| Terrain (CDEM) | NRCan | 20 m |
-| Vegetation (NDVI) | MODIS MOD13A2 | 1 km |
+| Fire Weather Index | CEMS fire danger reanalysis (Copernicus EWDS) | ~28 km |
+| Terrain | SRTM | 90 m |
 | Land cover | NRCan Canada LC 2020 | 30 m |
 
 Patches: **64 × 64 pixels at 1 km/pixel** centered on active fire perimeters.
 Coverage: **BC fire seasons 2012–2023**.
+
+Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. Two of the 19 input channels are still zero-filled: NDVI (MODIS HDF needs `pyhdf`) and the BurnP3 burn probability.
+
+**Targets are synthetic.** Perimeters give only a fire's final extent, so `generate_daily_masks` grows each fire from a seed toward its final perimeter, with daily spread scaled by FWI, ISI and wind. Scores therefore measure how well a model learns that generator, not real fire behaviour. Real VIIRS progression targets are the next step.
 
 ---
 
@@ -35,7 +37,7 @@ Coverage: **BC fire seasons 2012–2023**.
 
 | Model | Description | Target |
 |---|---|---|
-| Random Forest | Pixel-level baseline (18 features) | Establishes AUC-PR anchor |
+| Random Forest | Pixel-level baseline (19 features) | Establishes AUC-PR anchor |
 | U-Net CNN | Spatial encoder-decoder | ≥ 5pp AUC-PR over RF |
 | ConvLSTM | Spatiotemporal (T=5 days history) | ≥ 5pp AUC-PR over U-Net |
 
@@ -44,6 +46,8 @@ Primary metric: **new-burn AUC-PR**, scored only on pixels not burned at day T. 
 ```bash
 python scripts/evaluate_checkpoints.py --split test
 ```
+
+Current U-Net result (test, seeds 42 / 1 / 2): **0.447 ± 0.064** new-burn AUC-PR against 0.177 for the distance baseline. On the September data, where most weather channels were empty, it scored 0.559 ± 0.012. The drop is under investigation: flip and rotation augmentation does not rotate the wind direction channel, which now drives the synthetic spread.
 
 ---
 
@@ -56,8 +60,10 @@ python -m venv .venv && source .venv/bin/activate
 # 2. Install
 pip install -e ".[dev]"
 
-# 3. Configure ERA5 access (one-time)
-# Register at https://cds.climate.copernicus.eu and place your key in ~/.cdsapirc
+# 3. Configure Copernicus access (one-time)
+# Register at https://cds.climate.copernicus.eu and place your key in ~/.cdsapirc.
+# FWI comes from EWDS with the same key: accept the licence on the
+# "cems-fire-historical-v1" dataset page at https://ewds.climate.copernicus.eu
 
 # 4. Download Canadian data
 python scripts/download_canada.py --province BC --years 2012 2023
@@ -68,8 +74,11 @@ python scripts/assemble_patches.py --province BC
 # 6. Run EDA
 jupyter notebook notebooks/01_eda.ipynb
 
-# 7. Train baseline
+# 7. Train (MLflow 3 needs the flag for the local file store)
+export MLFLOW_ALLOW_FILE_STORE=true
 python src/training/train.py --config-name baseline_rf
+python src/training/train.py --config-name unet training.seed=42
+python src/training/train.py --config-name convlstm
 
 # 8. Start MLflow UI
 mlflow ui --backend-store-uri experiments/mlruns
@@ -116,7 +125,7 @@ pytest tests/                                         # research
 cd apps/web && npm test && npm run test:e2e           # web unit + Playwright
 ```
 
-CI (`.github/workflows/tests.yml`) runs all three on every PR to `main`.
+CI (`.github/workflows/test.yml`) runs the API and web suites on every PR to `main`. For research code it runs only `tests/test_metrics.py`; `tests/test_dataset.py` needs PyTorch, which CI does not install, so run it locally.
 
 ### Deploy
 
@@ -143,13 +152,13 @@ CI (`.github/workflows/tests.yml`) runs all three on every PR to `main`.
 wildfire_prediction/
 ├── data/
 │   ├── raw/            # Downloaded source files (gitignored)
-│   ├── processed/      # Assembled .npz patches + split manifests (gitignored)
+│   ├── processed/      # Assembled .npz patches + split manifests (gitignored, except two stats files the API reads)
 │   └── external/       # Alberta/Saskatchewan (Phase 2)
 ├── notebooks/          # EDA + experiment notebooks
 ├── api/                # FastAPI service (Railway): fires, weather, spread, risk, ignition, Grok reports
 ├── apps/web/           # Next.js map (Vercel)
 ├── src/
-│   ├── data/           # Download + assembly + PyTorch Dataset
+│   ├── data/           # Patch assembly + PyTorch Dataset + augmentation
 │   ├── models/         # RF, U-Net, ConvLSTM
 │   ├── training/       # Training loop + evaluation
 │   ├── response/       # xAI Grok decision-support client
@@ -157,7 +166,7 @@ wildfire_prediction/
 ├── configs/            # Hydra YAML configs
 ├── prompts/            # Grok prompt templates
 ├── experiments/        # MLflow tracking root
-├── scripts/            # Data download + experiment runner
+├── scripts/            # Data download, patch assembly, checkpoint evaluation
 └── tests/              # Research tests (API tests live in api/api_tests)
 ```
 
@@ -166,12 +175,12 @@ wildfire_prediction/
 ## Data sources
 
 - [BC Wildfire Service open data](https://catalogue.data.gov.bc.ca/dataset/fire-perimeters-historical)
-- [CWFIS Datamart](https://cwfis.cfs.nrcan.gc.ca/datamart)
-- [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/)
 - [ERA5 / Copernicus CDS](https://cds.climate.copernicus.eu)
-- [Canadian Digital Elevation Model](https://open.canada.ca/data/en/dataset/7f245e4d-76c2-4caa-951a-45d1d2051333)
+- [CEMS fire danger reanalysis / Copernicus EWDS](https://ewds.climate.copernicus.eu)
+- [SRTM 90 m](https://srtm.csi.cgiar.org/)
 - [Canada Land Cover 2020](https://open.canada.ca/data/en/dataset/4e615eae-b90c-420b-adee-2ca35896caf6)
-- [MODIS MOD13A2 NDVI](https://lpdaac.usgs.gov/products/mod13a2v061/)
+- [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) and [CWFIS Datamart](https://cwfis.cfs.nrcan.gc.ca/datamart) (web app: live hotspots and fire weather)
+- [MODIS MOD13A2 NDVI](https://lpdaac.usgs.gov/products/mod13a2v061/) (not yet loaded)
 
 ---
 
