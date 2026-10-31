@@ -33,10 +33,10 @@ export default function FirePanel({ fire, view }: Props) {
           lat: fire.lat,
           lon: fire.lon,
           current_area_ha: fire.size_ha,
-          fwi: fire.fwi ?? 20,
-          isi: fire.isi ?? 8,
-          wind_speed_ms: fire.wind_speed_ms ?? 5,
-          wind_dir_deg: fire.wind_dir_deg ?? 270,
+          fwi: fire.fwi,
+          isi: fire.isi,
+          wind_speed_ms: fire.wind_speed_ms,
+          wind_dir_deg: fire.wind_dir_deg,
         }),
       });
       if (!res.ok) throw new Error(`API ${res.status}`);
@@ -121,7 +121,7 @@ export default function FirePanel({ fire, view }: Props) {
 
         {report && (
           <div className="mt-3 text-xs text-gray-300 bg-gray-800 rounded-lg p-3 leading-relaxed whitespace-pre-wrap">
-            {report}
+            {renderEmphasis(report)}
           </div>
         )}
       </div>
@@ -160,5 +160,14 @@ function Stat({
         </span>
       )}
     </div>
+  );
+}
+
+/** Render the **bold** and _italic_ the briefings use, without injecting HTML. */
+function renderEmphasis(text: string) {
+  return text.split(/(\*\*[^*]+\*\*|(?<!\w)_[^\n]+?_(?!\w))/).map((part, i) =>
+    part.startsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong>
+    : part.startsWith("_") && part.length > 1 ? <em key={i}>{part.slice(1, -1)}</em>
+    : part
   );
 }

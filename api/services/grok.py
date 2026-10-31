@@ -18,12 +18,12 @@ async def generate_situation_report(
     current_area_ha: float,
     lat: float,
     lon: float,
-    fwi: float,
-    isi: float,
-    wind_speed_ms: float,
-    wind_dir_deg: float,
-    spread_p50_ha: float,
-    spread_p75_ha: float,
+    fwi: Optional[float],
+    isi: Optional[float],
+    wind_speed_ms: Optional[float],
+    wind_dir_deg: Optional[float],
+    spread_p50_ha: Optional[float],
+    spread_p75_ha: Optional[float],
 ) -> str:
     """
     Generate a plain-English situation report via xAI Grok.
@@ -31,10 +31,7 @@ async def generate_situation_report(
     """
     api_key = os.environ.get("XAI_API_KEY", "")
     if not api_key:
-        return (
-            f"**{fire_name or fire_id}** — {current_area_ha:,.0f} ha\n\n"
-            f"Fire Weather Index: {fwi:.0f} | Wind: {wind_speed_ms:.0f} m/s\n"
-            f"Heuristic 24h spread estimate (not an ML forecast): {spread_p50_ha:,.0f}–{spread_p75_ha:,.0f} ha\n\n"
+        return _summary(fire_id, fire_name, current_area_ha, fwi, isi, wind_speed_ms, spread_p50_ha, spread_p75_ha) + (
             "_Grok situation report unavailable — set XAI_API_KEY for AI-generated briefings._"
         )
 
@@ -58,7 +55,7 @@ async def generate_situation_report(
     prompt = f"""You are a wildfire situation analyst for the BC Wildfire Service.
 
 Given this fire intelligence data, write a concise 3-4 sentence situation briefing for an emergency manager.
-Be specific about numbers. The spread figures are a rough wind/FWI heuristic, not a model forecast; say so if you use them. State the main risk driver (wind/drought/fuel). Recommend one immediate action.
+Be specific about numbers. Weather comes from the nearest CWFIS station; if it is null, say no current weather is available and do not guess. The spread figures are a rough wind/FWI heuristic, not a model forecast; say so if you use them. State the main risk driver (wind/drought/fuel). Recommend one immediate action.
 
 Fire data:
 {payload_json}
@@ -80,9 +77,18 @@ Situation briefing:"""
         return response.choices[0].message.content.strip()
     except Exception as exc:
         log.error("Grok API error (%s)", type(exc).__name__)
-        return (
-            f"**{fire_name or fire_id}** — {current_area_ha:,.0f} ha\n\n"
-            f"FWI: {fwi:.0f} | ISI: {isi:.0f} | Wind: {wind_speed_ms:.0f} m/s\n"
-            f"Heuristic 24h spread estimate (not an ML forecast): {spread_p50_ha:,.0f}–{spread_p75_ha:,.0f} ha\n\n"
+        return _summary(fire_id, fire_name, current_area_ha, fwi, isi, wind_speed_ms, spread_p50_ha, spread_p75_ha) + (
             "_AI briefing temporarily unavailable._"
         )
+
+
+def _summary(fire_id, fire_name, area_ha, fwi, isi, wind_speed_ms, p50_ha, p75_ha) -> str:
+    """Plain summary used when Grok is unavailable."""
+    if fwi is None:
+        weather = "No CWFIS weather station is reporting near this fire, so there is no spread estimate.\n\n"
+    else:
+        weather = (
+            f"FWI: {fwi:.0f} | ISI: {isi:.0f} | Wind: {wind_speed_ms:.0f} m/s (nearest CWFIS station)\n"
+            f"Heuristic 24h spread estimate (not an ML forecast): {p50_ha:,.0f}–{p75_ha:,.0f} ha\n\n"
+        )
+    return f"**{fire_name or fire_id}** — {area_ha:,.0f} ha\n\n" + weather

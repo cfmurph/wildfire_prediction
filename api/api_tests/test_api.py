@@ -239,10 +239,11 @@ def test_weather_uses_live_rows_when_present(client, monkeypatch):
     def respond(url: str):
         return _http_response(
             url,
-            json_data=[
-                {"lat": 49.2, "lon": -123.1, "fwi": 18, "stn_id": "1", "stn_name": "LIVE"},
-                {"lat": 10, "lon": 10, "fwi": 40, "stn_id": "2", "stn_name": "OUT"},
-            ],
+            json_data={"features": [
+                {"properties": {"lat": 49.2, "lon": -123.1, "fwi": 18, "aes": "1", "name": "LIVE  "}},
+                {"properties": {"lat": 10, "lon": 10, "fwi": 40, "aes": "2", "name": "OUT"}},
+                {"properties": {"lat": 50.1, "lon": -120.0, "fwi": None, "aes": "3", "name": "NO FWI"}},
+            ]},
         )
 
     _install_async(monkeypatch, respond)
@@ -288,6 +289,17 @@ def test_situation_without_key_does_not_state_a_spread_forecast(client):
     response = client.post("/api/v1/situation", json=_situation_body())
     assert response.status_code == 200
     assert "spread forecast" not in response.text.lower()
+
+
+def test_situation_without_weather_does_not_invent_a_spread(client):
+    response = client.post("/api/v1/situation", json=_situation_body()).json()
+    assert response["spread_geojson"]["features"] == []
+    assert "No CWFIS weather station" in response["report"]
+
+    weather = {"fwi": 25, "isi": 9, "wind_speed_ms": 6, "wind_dir_deg": 225}
+    response = client.post("/api/v1/situation", json=_situation_body(**weather)).json()
+    assert response["spread_geojson"]["features"]
+    assert "FWI: 25" in response["report"]
 
 
 def test_situation_escapes_names_and_hides_provider_errors(client, monkeypatch):
