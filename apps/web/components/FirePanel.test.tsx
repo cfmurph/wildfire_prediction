@@ -68,3 +68,15 @@ describe("FirePanel", () => {
     expect(button).toBeEnabled();
   });
 });
+
+describe("FirePanel report formatting", () => {
+  it("renders bold and italic without breaking on underscores in names", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ report: "**N123** — 42 ha\n\n_Set XAI_API_KEY for briefings._" }), { status: 200 },
+    )));
+    render(<FirePanel fire={fire} view="current" />);
+    fireEvent.click(screen.getByRole("button", { name: /Generate Situation Report/ }));
+    expect(await screen.findByText("N123", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.getByText("Set XAI_API_KEY for briefings.", { selector: "em" })).toBeInTheDocument();
+  });
+});

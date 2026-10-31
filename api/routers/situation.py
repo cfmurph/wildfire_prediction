@@ -18,10 +18,11 @@ class SituationRequest(BaseModel):
     lat: float
     lon: float
     current_area_ha: float = 0.0
-    fwi: float = 20.0
-    isi: float = 8.0
-    wind_speed_ms: float = 5.0
-    wind_dir_deg: float = 270.0
+    # From the nearest reporting CWFIS station; None when no station is reporting
+    fwi: Optional[float] = None
+    isi: Optional[float] = None
+    wind_speed_ms: Optional[float] = None
+    wind_dir_deg: Optional[float] = None
 
 
 class SituationResponse(BaseModel):
@@ -42,26 +43,21 @@ async def situation_report(req: SituationRequest):
         raise HTTPException(429, "Situation report limit reached. Try again later.")
     _recent_reports.append(now)
 
-    # Get spread forecast
-    spread = predictor.spread_forecast(
-        lat=req.lat,
-        lon=req.lon,
-        wind_dir_deg=req.wind_dir_deg,
-        wind_speed_ms=req.wind_speed_ms,
-        fwi=req.fwi,
-        isi=req.isi,
-        hours=24.0,
-    )
-
-    # Extract p50 and p75 area estimates
-    p50_ha = next(
-        (f["properties"]["area_ha"] for f in spread["features"]
-         if f["properties"]["percentile"] == "p50"), 0.0
-    )
-    p75_ha = next(
-        (f["properties"]["area_ha"] for f in spread["features"]
-         if f["properties"]["percentile"] == "p75"), 0.0
-    )
+    weather = (req.fwi, req.isi, req.wind_speed_ms, req.wind_dir_deg)
+    spread = {"type": "FeatureCollection", "features": []}
+    p50_ha = p75_ha = None
+    if None not in weather:
+        spread = predictor.spread_forecast(
+            lat=req.lat,
+            lon=req.lon,
+            wind_dir_deg=req.wind_dir_deg,
+            wind_speed_ms=req.wind_speed_ms,
+            fwi=req.fwi,
+            isi=req.isi,
+            hours=24.0,
+        )
+        areas = {f["properties"]["percentile"]: f["properties"]["area_ha"] for f in spread["features"]}
+        p50_ha, p75_ha = areas.get("p50", 0.0), areas.get("p75", 0.0)
 
     report = await grok.generate_situation_report(
         fire_id=req.fire_id,

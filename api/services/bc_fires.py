@@ -13,11 +13,12 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-# BC Wildfire Service public ArcGIS FeatureServer — current active fires
+# BC Wildfire Service public ArcGIS FeatureServer — current active fires.
+# The layer holds every fire this year; most are "Out", and it truncates at 1000.
 BC_ACTIVE_FIRES_URL = (
     "https://services6.arcgis.com/ubm4tcTYICKBpist/arcgis/rest/services"
     "/BCWS_ActiveFires_PublicView/FeatureServer/0/query"
-    "?where=1%3D1&outFields=*&outSR=4326&f=geojson"
+    "?where=FIRE_STATUS%3C%3E%27Out%27&outFields=*&outSR=4326&f=geojson"
 )
 
 # BC historical fire perimeters WFS (fixed URL)

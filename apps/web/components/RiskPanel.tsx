@@ -81,7 +81,7 @@ export default function RiskPanel({ month, onLayerToggle, clickedPoint }: Props)
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         fire_id: `risk-${month}-${clickedPoint.lat.toFixed(2)}-${clickedPoint.lon.toFixed(2)}`,
-        fire_name: `Hypothetical fire — ${MONTH_NAMES[month-1]} 2027`,
+        fire_name: `Hypothetical fire — typical ${MONTH_NAMES[month-1]}`,
         lat: clickedPoint.lat,
         lon: clickedPoint.lon,
         current_area_ha: 10,
@@ -113,7 +113,7 @@ export default function RiskPanel({ month, onLayerToggle, clickedPoint }: Props)
       {/* Month header */}
       <div>
         <h2 className="font-semibold text-white text-base">
-          {MONTH_NAMES[month - 1]} 2027 — Ignition Forecast
+          {MONTH_NAMES[month - 1]} — Ignition Climatology
         </h2>
         <p className="text-xs text-gray-400 mt-0.5">BC-wide fire ignition probability</p>
       </div>

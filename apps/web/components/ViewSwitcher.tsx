@@ -7,9 +7,9 @@ export type View = "current" | "history" | "predictions" | "risk";
 
 const VIEWS: { id: View; label: string; icon: React.ElementType; description: string }[] = [
   { id: "current",     label: "Current",     icon: Flame,      description: "Live hotspots + FWI" },
-  { id: "history",     label: "History",     icon: Clock,      description: "BC fires 2006–2024" },
+  { id: "history",     label: "History",     icon: Clock,      description: "BC fires 2006–2025" },
   { id: "predictions", label: "Predictions", icon: TrendingUp, description: "Next-day spread" },
-  { id: "risk",        label: "Risk",        icon: Map,        description: "12-month forecast" },
+  { id: "risk",        label: "Risk",        icon: Map,        description: "Monthly climatology" },
 ];
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -51,8 +51,8 @@ export default function ViewSwitcher({ current, onChange, historyYear, onYearCha
       {current === "risk" && (
         <div className="pt-1">
           <div className="flex justify-between text-xs text-gray-400 mb-1">
-            <span>12-month forecast</span>
-            <span className="font-semibold text-orange-400">{MONTH_NAMES[riskMonth - 1]} 2027</span>
+            <span>Typical month</span>
+            <span className="font-semibold text-orange-400">{MONTH_NAMES[riskMonth - 1]}</span>
           </div>
           <input
             type="range"
@@ -97,7 +97,7 @@ export default function ViewSwitcher({ current, onChange, historyYear, onYearCha
           <input
             type="range"
             min={2006}
-            max={2024}
+            max={2025}
             value={historyYear}
             onChange={(e) => onYearChange(Number(e.target.value))}
             className="w-full accent-orange-500 cursor-pointer"

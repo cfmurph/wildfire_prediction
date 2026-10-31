@@ -5,6 +5,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { View } from "./ViewSwitcher";
 import { SelectedFire } from "@/app/page";
+import { nearestStation } from "@/lib/utils";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -304,20 +305,29 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
         const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
         const props = f.properties as Record<string, unknown>;
 
+        let stn: Record<string, number> | null = null;
+        try {
+          stn = nearestStation(await (await fetch(`${API}/api/v1/weather/fwi`)).json(), lat, lon);
+        } catch {}
+
         onFireSelect({
           fire_id: String(props.fire_number || ""),
           fire_name: String(props.fire_name || ""),
           lat, lon,
           size_ha: Number(props.size_ha) || 0,
+          fwi: stn?.FWI,
+          isi: stn?.ISI,
+          wind_speed_ms: stn ? stn.wind_speed / 3.6 : undefined,   // CWFIS reports km/h
+          wind_dir_deg: stn?.wind_dir,
           source: "active",
           properties: props,
         });
 
-        // Fetch and show spread forecast
-        const fwi = 22, isi = 9, windSpeed = 5, windDir = 270;
+        // No spread estimate without real weather
+        if (!stn) return;
         try {
           const sres = await fetch(
-            `${API}/api/v1/predict/spread?lat=${lat}&lon=${lon}&fwi=${fwi}&isi=${isi}&wind_speed=${windSpeed}&wind_dir=${windDir}&hours=24`
+            `${API}/api/v1/predict/spread?lat=${lat}&lon=${lon}&fwi=${stn.FWI}&isi=${stn.ISI}&wind_speed=${stn.wind_speed / 3.6}&wind_dir=${stn.wind_dir}&hours=24`
           );
           const spread = await sres.json();
           addSpreadLayers(spread);
