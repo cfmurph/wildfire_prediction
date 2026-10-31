@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { Flame, Wind, Thermometer, Loader2, AlertTriangle, ArrowLeft, ExternalLink } from "lucide-react";
-import { View } from "./ViewSwitcher";
 import { SelectedFire } from "@/app/page";
 import { cn, fwiColor, fwiLabel, kmBetween, statusColor } from "@/lib/utils";
 
@@ -10,21 +9,23 @@ const API = process.env.NEXT_PUBLIC_API_URL;
 
 interface Props {
   fire: SelectedFire | null;
-  view: View;
   hotspots?: GeoJSON.Feature[];
   onBack?: () => void;
 }
 
-type Station = { station_name: string; distance_km: number; FWI: number; wind_speed: number; wind_dir: number };
+type Station = { station_name: string; distance_km: number; FWI: number; ISI: number; wind_speed: number; wind_dir: number };
+// 24 h areas (ha) for a new fire under the station's weather, from the heuristic spread model
+type Spread = { p25: number; p50: number; p75: number; dir: number };
 
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
-export default function FirePanel({ fire, view, hotspots = [], onBack }: Props) {
+export default function FirePanel({ fire, hotspots = [], onBack }: Props) {
   const [report, setReport] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // undefined while loading, null when no station is reporting nearby
   const [station, setStation] = useState<Station | null | undefined>(undefined);
+  const [spread, setSpread] = useState<Spread | null>(null);
   const [reportsAvailable, setReportsAvailable] = useState(false);
 
   useEffect(() => {
@@ -38,12 +39,23 @@ export default function FirePanel({ fire, view, hotspots = [], onBack }: Props) 
     setReport(null);
     setError(null);
     setStation(undefined);
+    setSpread(null);
     if (!fire || fire.source !== "active") return;
     let cancelled = false;
     fetch(`${API}/api/v1/weather/nearest?lat=${fire.lat}&lon=${fire.lon}`)
       .then((r) => r.json())
-      .then((s) => { if (!cancelled) setStation(typeof s?.FWI === "number" ? s : null); })
-      .catch(() => { if (!cancelled) setStation(null); });
+      .then(async (s) => {
+        if (cancelled) return;
+        if (typeof s?.FWI !== "number") return setStation(null);
+        setStation(s);
+        const q = `lat=${fire.lat}&lon=${fire.lon}&fwi=${s.FWI}&isi=${s.ISI}&wind_speed=${s.wind_speed / 3.6}&wind_dir=${s.wind_dir}&hours=24`;
+        const features: GeoJSON.Feature[] = (await (await fetch(`${API}/api/v1/predict/spread?${q}`)).json())?.features ?? [];
+        const area = (p: string) => Number(features.find((f) => f.properties?.percentile === p)?.properties?.area_ha);
+        if (!cancelled && area("p50") > 0) {
+          setSpread({ p25: area("p25"), p50: area("p50"), p75: area("p75"), dir: Number(features[0].properties?.spread_dir_deg) });
+        }
+      })
+      .catch(() => { if (!cancelled) setStation((s) => s ?? null); });
     return () => { cancelled = true; };
   }, [fire]);
 
@@ -148,6 +160,15 @@ export default function FirePanel({ fire, view, hotspots = [], onBack }: Props) 
                 icon={<Wind className="w-3 h-3" />}
               />
             </div>
+          )}
+          {spread && (
+            <p className="text-xs text-gray-400 leading-relaxed">
+              In this weather a new fire would reach about <span className="text-white">{spread.p50.toLocaleString()} ha</span> in
+              24 h (likely {spread.p25.toLocaleString()}–{spread.p75.toLocaleString()} ha), spreading {COMPASS[Math.round(spread.dir / 45) % 8]}.
+              <span className="block text-[10px] text-gray-500 mt-0.5">
+                Rule of thumb from FWI and wind only; it ignores this fire&apos;s size, fuels and terrain.
+              </span>
+            </p>
           )}
         </div>
       )}

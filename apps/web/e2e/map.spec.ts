@@ -51,12 +51,13 @@ test("map page switches views against a mocked API", async ({ page }) => {
   await expect(page.getByRole("slider")).toHaveValue("2023");
   await expect(page.getByText("2023: 0 fires · 0 ha")).toBeVisible();
 
-  // Switching tabs drops the selection, so Predictions opens on the fire list
-  await page.getByRole("button", { name: /Predictions/ }).click();
+  await page.getByRole("button", { name: /Risk/ }).click();
+  await expect(page.getByText(/: where fires tend to start/)).toBeVisible();
+
+  // Switching tabs drops the selection, so Current opens on the fire list
+  await page.getByRole("button", { name: /Current/ }).click();
   await expect(page.getByRole("slider")).toHaveCount(0);
   await expect(page.getByText("1 active fire · 1,200 ha")).toBeVisible();
-  await page.getByRole("button", { name: /Risk/ }).click();
-  await expect(page.getByText("BC-wide fire ignition probability")).toBeVisible();
 
   await expect.poll(() => calls.some((path) => path.includes("/api/v1/"))).toBe(true);
 });
