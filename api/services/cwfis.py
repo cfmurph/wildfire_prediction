@@ -11,6 +11,8 @@ the fire season few or no BC stations report FWI.
 from __future__ import annotations
 
 import logging
+import math
+from typing import Optional
 
 import httpx
 
@@ -71,6 +73,19 @@ async def get_current_fwi() -> dict:
         log.warning("CWFIS live API unavailable (%s)", type(exc).__name__)
 
     return {"type": "FeatureCollection", "features": []}
+
+
+async def nearest_station(lat: float, lon: float, max_km: float = 100.0) -> Optional[dict]:
+    """Properties of the nearest reporting BC station within max_km, or None."""
+    best, best_km = None, max_km
+    for feat in (await get_current_fwi())["features"]:
+        s_lon, s_lat = feat["geometry"]["coordinates"]
+        # Equirectangular distance is accurate enough at 100 km
+        x = math.radians(s_lon - lon) * math.cos(math.radians((s_lat + lat) / 2))
+        km = 6371 * math.hypot(x, math.radians(s_lat - lat))
+        if km <= best_km:
+            best, best_km = {**feat["properties"], "distance_km": round(km, 1)}, km
+    return best
 
 
 def _fwi_class(fwi: float) -> str:

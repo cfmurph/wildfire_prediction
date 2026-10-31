@@ -291,15 +291,41 @@ def test_situation_without_key_does_not_state_a_spread_forecast(client):
     assert "spread forecast" not in response.text.lower()
 
 
-def test_situation_without_weather_does_not_invent_a_spread(client):
-    response = client.post("/api/v1/situation", json=_situation_body()).json()
+def _station_feed(url: str):
+    return _http_response(
+        url,
+        json_data={"features": [
+            {"properties": {"lat": 53.1, "lon": -124.0, "fwi": 25, "isi": 9, "ws": 18, "wdir": 225, "name": "NEAR"}},
+        ]},
+    )
+
+
+def test_situation_ignores_client_weather_for_real_fires(client):
+    weather = {"fwi": 99, "isi": 99, "wind_speed_ms": 30, "wind_dir_deg": 0}
+    response = client.post("/api/v1/situation", json=_situation_body(**weather)).json()
     assert response["spread_geojson"]["features"] == []
     assert "No CWFIS weather station" in response["report"]
 
-    weather = {"fwi": 25, "isi": 9, "wind_speed_ms": 6, "wind_dir_deg": 225}
-    response = client.post("/api/v1/situation", json=_situation_body(**weather)).json()
+
+def test_situation_uses_the_nearest_station(client, monkeypatch):
+    _install_async(monkeypatch, _station_feed)
+    response = client.post("/api/v1/situation", json=_situation_body()).json()
     assert response["spread_geojson"]["features"]
     assert "FWI: 25" in response["report"]
+    assert "Wind: 5 m/s (CWFIS station NEAR, 11.1 km away)" in response["report"]
+
+
+def test_situation_labels_hypothetical_weather_as_assumed(client):
+    weather = {"fwi": 28, "isi": 10, "wind_speed_ms": 4.5, "wind_dir_deg": 270}
+    response = client.post("/api/v1/situation", json=_situation_body(hypothetical=True, **weather)).json()
+    assert response["spread_geojson"]["features"]
+    assert "assumed typical weather" in response["report"]
+
+
+def test_nearest_station_is_within_range_or_null(client, monkeypatch):
+    _install_async(monkeypatch, _station_feed)
+    assert client.get("/api/v1/weather/nearest?lat=53.0&lon=-124.0").json()["station_name"] == "NEAR"
+    assert client.get("/api/v1/weather/nearest?lat=58.0&lon=-124.0").json() is None
 
 
 def test_situation_escapes_names_and_hides_provider_errors(client, monkeypatch):

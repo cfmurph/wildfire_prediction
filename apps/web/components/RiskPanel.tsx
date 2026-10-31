@@ -85,6 +85,7 @@ export default function RiskPanel({ month, onLayerToggle, clickedPoint }: Props)
         lat: clickedPoint.lat,
         lon: clickedPoint.lon,
         current_area_ha: 10,
+        hypothetical: true,
         fwi,
         isi: fwi * 0.35,
         wind_speed_ms: 4.5,

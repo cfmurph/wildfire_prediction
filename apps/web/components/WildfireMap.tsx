@@ -5,7 +5,6 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { View } from "./ViewSwitcher";
 import { SelectedFire } from "@/app/page";
-import { nearestStation } from "@/lib/utils";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -307,7 +306,7 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
 
         let stn: Record<string, number> | null = null;
         try {
-          stn = nearestStation(await (await fetch(`${API}/api/v1/weather/fwi`)).json(), lat, lon);
+          stn = await (await fetch(`${API}/api/v1/weather/nearest?lat=${lat}&lon=${lon}`)).json();
         } catch {}
 
         onFireSelect({
