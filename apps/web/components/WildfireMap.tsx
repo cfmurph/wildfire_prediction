@@ -43,6 +43,8 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const popup = useRef<maplibregl.Popup | null>(null);
+  // Data layers need only the style, not the basemap tiles ("load" and isStyleLoaded() wait for those)
+  const [ready, setReady] = useState(false);
   // Layer event handlers registered by the current view; removed on view change so they don't pile up
   const handlers = useRef<[LayerEvent, string, (e: maplibregl.MapLayerMouseEvent) => void][]>([]);
   const [history, setHistory] = useState<HistorySummary>(null);
@@ -86,6 +88,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
       attributionControl: { compact: true },
     });
 
+    map.current.once("style.load", () => setReady(true));
     map.current.addControl(new maplibregl.NavigationControl(), "bottom-right");
     map.current.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
 
@@ -456,17 +459,12 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
 
   // ── React to view changes ──────────────────────────────────────────────────
   useEffect(() => {
-    if (!map.current) return;
-    const onLoad = () => {
-      if (view === "current")     loadCurrentView();
-      if (view === "history")     loadHistoryView(historyYear);
-      if (view === "predictions") loadPredictionsView();
-      if (view === "risk")        loadRiskView(riskMonth);
-    };
-
-    if (map.current.isStyleLoaded()) onLoad();
-    else map.current.once("load", onLoad);
-  }, [view, historyYear, riskMonth, loadCurrentView, loadHistoryView, loadPredictionsView, loadRiskView]);
+    if (!map.current || !ready) return;
+    if (view === "current")     loadCurrentView();
+    if (view === "history")     loadHistoryView(historyYear);
+    if (view === "predictions") loadPredictionsView();
+    if (view === "risk")        loadRiskView(riskMonth);
+  }, [ready, view, historyYear, riskMonth, loadCurrentView, loadHistoryView, loadPredictionsView, loadRiskView]);
 
   // ── React to layer toggle changes (B) ─────────────────────────────────────
   useEffect(() => {

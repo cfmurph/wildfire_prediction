@@ -6,10 +6,12 @@ const PIXEL = Buffer.from(
 );
 
 // Basemap and FIRMS WMS tiles are third-party. Stub them so CI does not call those hosts.
+// They answer slowly, so tab switches happen while tiles are still streaming, as on a slow connection.
 test.beforeEach(async ({ page }) => {
   await page.route(
     /arcgisonline\.com|openstreetmap\.org|firms\.modaps\.eosdis\.nasa\.gov/,
     async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
       await route.fulfill({ status: 200, contentType: "image/png", body: PIXEL });
     },
   );
