@@ -36,7 +36,7 @@ BC_HISTORICAL_WFS = (
 BC_CURRENT_WFS = BC_HISTORICAL_WFS.replace("PROT_HISTORICAL_FIRE_POLYS_SP", "PROT_CURRENT_FIRE_POLYS_SP")
 
 
-async def get_active_fires() -> dict:
+async def get_active_fires() -> dict | None:
     """
     Fetch current active BC wildfires from the public ArcGIS FeatureServer.
     Returns GeoJSON FeatureCollection (always works, no auth required).
@@ -79,21 +79,21 @@ async def get_active_fires() -> dict:
 
     except Exception as exc:
         log.error("BC active fires fetch failed (%s)", type(exc).__name__)
-        return {"type": "FeatureCollection", "features": []}
+        return None
 
 
-async def get_historical_perimeters(year: int) -> dict:
+async def get_historical_perimeters(year: int) -> dict | None:
     """
     Fetch BC fire perimeters for a given year (up to 2000 features).
     Falls back to the current-season layer for a year BC has not archived yet.
     """
     data = await _get_perimeters(BC_HISTORICAL_WFS, year)
-    if not data["features"]:
+    if not (data and data["features"]):
         data = await _get_perimeters(BC_CURRENT_WFS, year)
     return data
 
 
-async def _get_perimeters(url_template: str, year: int) -> dict:
+async def _get_perimeters(url_template: str, year: int) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url_template.format(year=year))
@@ -125,7 +125,7 @@ async def _get_perimeters(url_template: str, year: int) -> dict:
 
     except Exception as exc:
         log.error("BC fire perimeters fetch failed for %s (%s)", year, type(exc).__name__)
-        return {"type": "FeatureCollection", "features": []}
+        return None
 
 
 def _as_float(value: object, default: float = 0.0) -> float:

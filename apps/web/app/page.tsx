@@ -43,16 +43,17 @@ export default function Home() {
   const [riskClickedPoint, setRiskClickedPoint] = useState<{ lat: number; lon: number } | null>(null);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-dvh overflow-hidden">
       <Header />
-      <div className="flex flex-1 overflow-hidden">
+      {/* Phones: map on top, sidebar below. Wider screens: sidebar on the left */}
+      <div className="flex flex-col md:flex-row flex-1 min-h-0">
         {/* Sidebar */}
-        <aside className="w-80 bg-gray-900 border-r border-gray-800 flex flex-col">
+        <aside className="order-2 md:order-1 h-[45%] md:h-auto w-full md:w-80 bg-gray-900 border-t md:border-t-0 md:border-r border-gray-800 flex flex-col">
           <ViewSwitcher
             current={view}
-            onChange={setView}
+            onChange={(v) => { setView(v); setSelectedFire(null); }}
             historyYear={historyYear}
-            onYearChange={setHistoryYear}
+            onYearChange={(y) => { setHistoryYear(y); setSelectedFire(null); }}
             riskMonth={riskMonth}
             onRiskMonthChange={setRiskMonth}
           />
@@ -72,7 +73,7 @@ export default function Home() {
         </aside>
 
         {/* Map */}
-        <main className="flex-1 relative">
+        <main className="order-1 md:order-2 flex-1 min-h-0 relative">
           <WildfireMap
             view={view}
             onCurrentData={setCurrentData}

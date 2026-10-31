@@ -9,7 +9,7 @@ router = APIRouter()
 @router.get("/active")
 async def active_fires():
     """Current active BC wildfires from BC Wildfire Service ArcGIS."""
-    return await bc_fires.get_active_fires()
+    return _or_502(await bc_fires.get_active_fires())
 
 
 @router.get("/hotspots")
@@ -23,4 +23,11 @@ async def history(year: int = Query(default=2023, ge=2006)):
     """BC fire perimeters for a given year, including the current season."""
     if year > date.today().year:
         raise HTTPException(422, "year is in the future")
-    return await bc_fires.get_historical_perimeters(year=year)
+    return _or_502(await bc_fires.get_historical_perimeters(year=year))
+
+
+def _or_502(data: dict | None) -> dict:
+    """An upstream failure is an error, so the map never shows it as "no fires"."""
+    if data is None:
+        raise HTTPException(502, "BC Wildfire Service data is unavailable")
+    return data

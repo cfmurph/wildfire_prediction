@@ -79,7 +79,7 @@ export default function FirePanel({ fire, view, hotspots = [], onBack }: Props) 
       <div className="p-4 text-center text-gray-500 text-sm mt-8">
         <Flame className="w-8 h-8 mx-auto mb-2 opacity-30" />
         <p>Click a fire on the map</p>
-        <p className="text-xs mt-1 opacity-60">to see details and generate a situation report</p>
+        <p className="text-xs mt-1 opacity-60">to see its size, cause and dates</p>
       </div>
     );
   }
@@ -106,6 +106,7 @@ export default function FirePanel({ fire, view, hotspots = [], onBack }: Props) 
         <h2 className="font-semibold text-sm text-white leading-tight">
           {fire.fire_name || fire.fire_id}
           {fire.fire_name && fire.fire_name !== fire.fire_id && <span className="text-gray-500 font-normal"> · {fire.fire_id}</span>}
+          {fire.source === "history" && p.fire_year ? <span className="text-gray-500 font-normal"> · {String(p.fire_year)} season</span> : null}
         </h2>
         <p className="text-xs text-gray-400 mt-0.5">
           {String(p.location || `${fire.lat.toFixed(4)}°N, ${Math.abs(fire.lon).toFixed(4)}°W`)}
@@ -122,7 +123,7 @@ export default function FirePanel({ fire, view, hotspots = [], onBack }: Props) 
       <div className="grid grid-cols-2 gap-2">
         <Stat label="Size" value={fire.size_ha > 0 ? `${fire.size_ha.toLocaleString()} ha` : "—"} />
         <Stat label="Cause" value={String(p.fire_cause || "—")} />
-        {fire.source === "active" && <Stat label="Started" value={String(p.ignition_date || "—")} />}
+        <Stat label="Started" value={String(p.ignition_date || "—").slice(0, 10)} />
         {fire.source === "active" && (
           <Stat label="Hotspots, 24 h" value={`${detections} within ${radiusKm.toFixed(0)} km`} />
         )}

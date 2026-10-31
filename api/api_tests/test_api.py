@@ -166,14 +166,13 @@ def test_active_fires_keep_valid_points_when_one_feature_is_bad(client, monkeypa
     assert features[0]["properties"]["fire_of_note"] is True
 
 
-def test_active_fires_upstream_failure_is_empty(client, monkeypatch):
+def test_fire_upstream_failure_is_an_error_not_zero_fires(client, monkeypatch):
     def respond(_url: str):
         raise httpx.ConnectError("down")
 
     _install_async(monkeypatch, respond)
-    response = client.get("/api/v1/fires/active")
-    assert response.status_code == 200
-    assert response.json()["features"] == []
+    assert client.get("/api/v1/fires/active").status_code == 502
+    assert client.get("/api/v1/fires/history?year=2018").status_code == 502
 
 
 def test_history_tolerates_a_bad_size(client, monkeypatch):

@@ -28,6 +28,15 @@ export const FIRE_STATUSES = [
   { status: "Under Control",  color: "#22c55e" },
 ] as const;
 
+/** Perimeter fill by final size, smallest first. */
+export const HISTORY_SIZES = [
+  { ha: 0,      color: "#fef9c3", label: "Under 100 ha" },
+  { ha: 100,    color: "#fde047", label: "100 ha" },
+  { ha: 1000,   color: "#f97316", label: "1,000 ha" },
+  { ha: 10000,  color: "#dc2626", label: "10,000 ha" },
+  { ha: 100000, color: "#7c3aed", label: "100,000 ha +" },
+] as const;
+
 export function statusColor(status: string): string {
   return FIRE_STATUSES.find((s) => s.status === status)?.color ?? "#9ca3af";
 }
