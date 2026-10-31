@@ -33,10 +33,6 @@ export default function FirePanel({ fire, view }: Props) {
           lat: fire.lat,
           lon: fire.lon,
           current_area_ha: fire.size_ha,
-          fwi: fire.fwi,
-          isi: fire.isi,
-          wind_speed_ms: fire.wind_speed_ms,
-          wind_dir_deg: fire.wind_dir_deg,
         }),
       });
       if (!res.ok) throw new Error(`API ${res.status}`);

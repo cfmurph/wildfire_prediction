@@ -47,7 +47,8 @@ describe("FirePanel", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(body.fire_id).toBe("N123");
     expect(body.lat).toBe(49.25);
-    expect(body.fwi).toBe(18);
+    // The API looks up station weather itself; the browser must not supply it
+    expect(body.fwi).toBeUndefined();
   });
 
   it("disables the button while the request is in flight and shows API errors", async () => {

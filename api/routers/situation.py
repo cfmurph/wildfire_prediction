@@ -3,7 +3,7 @@ from collections import deque
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from api.services import grok, predictor
+from api.services import cwfis, grok, predictor
 
 router = APIRouter()
 
@@ -18,7 +18,9 @@ class SituationRequest(BaseModel):
     lat: float
     lon: float
     current_area_ha: float = 0.0
-    # From the nearest reporting CWFIS station; None when no station is reporting
+    # Real fires use the nearest reporting CWFIS station, looked up here.
+    # Client weather is used only for hypothetical fires and is labelled as assumed.
+    hypothetical: bool = False
     fwi: Optional[float] = None
     isi: Optional[float] = None
     wind_speed_ms: Optional[float] = None
@@ -43,17 +45,26 @@ async def situation_report(req: SituationRequest):
         raise HTTPException(429, "Situation report limit reached. Try again later.")
     _recent_reports.append(now)
 
-    weather = (req.fwi, req.isi, req.wind_speed_ms, req.wind_dir_deg)
+    if req.hypothetical:
+        weather = (req.fwi, req.isi, req.wind_speed_ms, req.wind_dir_deg)
+        weather_source = "assumed typical weather, not a measurement"
+    else:
+        stn = await cwfis.nearest_station(req.lat, req.lon) or {}
+        weather = (stn.get("FWI"), stn.get("ISI"), stn.get("wind_speed"), stn.get("wind_dir"))
+        if stn:
+            weather = (*weather[:2], weather[2] / 3.6, weather[3])   # CWFIS reports km/h
+        weather_source = f"CWFIS station {stn.get('station_name')}, {stn.get('distance_km')} km away"
+    fwi, isi, wind_speed_ms, wind_dir_deg = weather
     spread = {"type": "FeatureCollection", "features": []}
     p50_ha = p75_ha = None
     if None not in weather:
         spread = predictor.spread_forecast(
             lat=req.lat,
             lon=req.lon,
-            wind_dir_deg=req.wind_dir_deg,
-            wind_speed_ms=req.wind_speed_ms,
-            fwi=req.fwi,
-            isi=req.isi,
+            wind_dir_deg=wind_dir_deg,
+            wind_speed_ms=wind_speed_ms,
+            fwi=fwi,
+            isi=isi,
             hours=24.0,
         )
         areas = {f["properties"]["percentile"]: f["properties"]["area_ha"] for f in spread["features"]}
@@ -65,10 +76,11 @@ async def situation_report(req: SituationRequest):
         current_area_ha=req.current_area_ha,
         lat=req.lat,
         lon=req.lon,
-        fwi=req.fwi,
-        isi=req.isi,
-        wind_speed_ms=req.wind_speed_ms,
-        wind_dir_deg=req.wind_dir_deg,
+        fwi=fwi,
+        isi=isi,
+        wind_speed_ms=wind_speed_ms,
+        wind_dir_deg=wind_dir_deg,
+        weather_source=weather_source,
         spread_p50_ha=p50_ha,
         spread_p75_ha=p75_ha,
     )
