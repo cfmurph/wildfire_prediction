@@ -17,10 +17,10 @@ from typing import Optional
 
 CHANNELS: list[str] = [
     "elevation",
-    "slope",
-    "aspect",
-    "wind_dir",
-    "wind_speed",
+    "slope_east",    # terrain gradient (rise per metre) toward east
+    "slope_north",   # ... and toward north
+    "wind_u",        # 16:00 PDT wind toward east (m/s)
+    "wind_v",        # ... and toward north
     "temp_min",
     "temp_max",
     "humidity",
@@ -40,6 +40,9 @@ CHANNELS: list[str] = [
 ]
 
 N_CHANNELS: int = len(CHANNELS)          # 19
+
+# (east, north) components; augmentation flips and rotates these with the patch
+VECTOR_CHANNEL_PAIRS: list[tuple[str, str]] = [("slope_east", "slope_north"), ("wind_u", "wind_v")]
 PATCH_SIZE: int = 64
 TARGET_RESOLUTION_M: int = 1000          # 1 km / pixel
 

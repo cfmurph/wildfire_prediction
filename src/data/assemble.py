@@ -40,7 +40,7 @@ from rasterio.enums import Resampling
 from rasterio.transform import from_bounds
 from shapely.geometry import box
 
-from src.utils.config import CHANNELS, PATCH_SIZE, TARGET_RESOLUTION_M
+from src.utils.config import CHANNELS, PATCH_SIZE, TARGET_RESOLUTION_M, VECTOR_CHANNEL_PAIRS
 
 log = logging.getLogger(__name__)
 
@@ -116,9 +116,9 @@ def generate_daily_masks(
         for i in range(se_size):
             for j in range(se_size):
                 dy, dx = i - center, j - center
-                # Rotate to spread direction frame
-                d_along =  dx * sin_d + dy * cos_d
-                d_cross =  dx * cos_d - dy * sin_d
+                # Rotate to spread direction frame; rows run south, so north = -dy
+                d_along =  dx * sin_d - dy * cos_d
+                d_cross =  dx * cos_d + dy * sin_d
                 if (d_along / r_along) ** 2 + (d_cross / r_cross) ** 2 <= 1.0:
                     se[i, j] = True
         if not se.any():
@@ -296,6 +296,11 @@ def burn_mask_from_perimeters(
 # ---------------------------------------------------------------------------
 # Terrain derivation
 # ---------------------------------------------------------------------------
+
+def _fill_nan(a: np.ndarray) -> np.ndarray:
+    """Fill pixels with no source data with the mean of the rest (0 if there is none)."""
+    return np.where(np.isnan(a), np.nanmean(a) if not np.isnan(a).all() else 0.0, a).astype(np.float32)
+
 
 def compute_slope_aspect(elevation: np.ndarray, resolution_m: float = 1000.0) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -670,11 +675,14 @@ class PatchExtractor:
 
         # --- Terrain (static) ---
         if self.cdem_path.exists():
-            elev = reproject_to_patch_grid(self.cdem_path, transform, OUTPUT_CRS, shape)
+            elev = reproject_to_patch_grid(self.cdem_path, transform, OUTPUT_CRS, shape, fill_value=np.nan)
+            # SRTM voids and land outside BC take the patch's mean elevation
+            elev = _fill_nan(np.where(elev <= -32767, np.nan, elev))
+            # Gradient as east/north components, which flips and rotations transform exactly
+            d_south, d_east = np.gradient(elev, TARGET_RESOLUTION_M)   # rows run south
             X[ch["elevation"]] = elev
-            slope, aspect = compute_slope_aspect(elev, TARGET_RESOLUTION_M)
-            X[ch["slope"]] = slope
-            X[ch["aspect"]] = aspect
+            X[ch["slope_east"]] = d_east
+            X[ch["slope_north"]] = -d_south
 
         # --- ERA5 weather ---
         for var_name, arr in self._load_era5_patch(date_str, transform, shape).items():
@@ -774,11 +782,9 @@ class PatchExtractor:
             name: self._regrid_numpy(arr.values.astype(np.float32), arr, transform, shape)
             for name, arr in self._era5_day(date_str).items()
         }
-        # Regrid wind as components; interpolating direction breaks across 360° → 0°
+        # Wind stays as components: no 360° → 0° wrap, and flips/rotations transform it exactly
         if "u10" in fields:
-            u, v = fields.pop("u10"), fields.pop("v10")
-            fields["wind_speed"] = np.hypot(u, v)
-            fields["wind_dir"] = (np.degrees(np.arctan2(-u, -v)) % 360).astype(np.float32)
+            fields["wind_u"], fields["wind_v"] = fields.pop("u10"), fields.pop("v10")
         return fields
 
     @functools.lru_cache(maxsize=256)
@@ -799,12 +805,10 @@ class PatchExtractor:
         shape: tuple[int, int],
     ) -> dict[str, np.ndarray]:
         """FWI indices for date_str, regridded to the patch grid."""
-        patches = {
+        return {
             name: self._regrid_numpy(arr.values.astype(np.float32), arr, transform, shape)
             for name, arr in self._fwi_day(date_str).items()
         }
-        # CEMS is NaN over ocean; coastal patches take the mean of their land pixels
-        return {name: np.where(np.isnan(a), np.nanmean(a), a) for name, a in patches.items()}
 
     def _regrid_numpy(
         self,
@@ -859,7 +863,8 @@ class PatchExtractor:
             ) as dst:
                 dst.write(d.astype(np.float32), 1)
 
-            return reproject_to_patch_grid(tmp_path, transform, OUTPUT_CRS, shape)
+            # CEMS is NaN over ocean, and patches can extend past the download box
+            return _fill_nan(reproject_to_patch_grid(tmp_path, transform, OUTPUT_CRS, shape, fill_value=np.nan))
         finally:
             tmp_path.unlink(missing_ok=True)
 
@@ -913,7 +918,9 @@ def compute_channel_stats(
     Compute per-channel mean and std over the training split patches.
     Saves stats/channel_stats.json.
 
-    Uses Welford's online algorithm to avoid loading all patches into RAM.
+    Accumulates per-channel sums one patch at a time to avoid loading all patches into RAM.
+    Vector channel pairs get mean 0 and one shared scale, so flips and rotations
+    (sign changes and swaps of the components) stay valid after normalisation.
     """
     stats_dir = Path(stats_dir)
     stats_dir.mkdir(parents=True, exist_ok=True)
@@ -922,27 +929,25 @@ def compute_channel_stats(
         train_records = json.load(f)
 
     n_channels = len(CHANNELS)
-    count = np.zeros(n_channels, dtype=np.float64)
-    mean = np.zeros(n_channels, dtype=np.float64)
-    M2 = np.zeros(n_channels, dtype=np.float64)   # sum of squared deviations
+    count = 0
+    total = np.zeros(n_channels, dtype=np.float64)
+    total_sq = np.zeros(n_channels, dtype=np.float64)
 
     for record in train_records:
         npz_path = patches_dir / f"{record['patch_id']}.npz"
         if not npz_path.exists():
             continue
-        data = np.load(npz_path)
-        X = data["X"].astype(np.float64)  # (C, H, W)
+        X = np.load(npz_path)["X"].astype(np.float64).reshape(n_channels, -1)
+        count += X.shape[1]
+        total += X.sum(axis=1)
+        total_sq += (X ** 2).sum(axis=1)
 
-        for c in range(n_channels):
-            pixels = X[c].ravel()
-            for val in pixels:
-                count[c] += 1
-                delta = val - mean[c]
-                mean[c] += delta / count[c]
-                delta2 = val - mean[c]
-                M2[c] += delta * delta2
-
-    std = np.sqrt(np.where(count > 1, M2 / (count - 1), 0.0))
+    mean = total / max(count, 1)
+    std = np.sqrt(np.maximum(total_sq / max(count, 1) - mean ** 2, 0.0))
+    for pair in VECTOR_CHANNEL_PAIRS:
+        idx = [CHANNELS.index(c) for c in pair]
+        mean[idx] = 0.0
+        std[idx] = np.sqrt(total_sq[idx].sum() / (2 * max(count, 1)))   # RMS over both components
     for i in np.flatnonzero(std == 0):
         log.error(f"Channel '{CHANNELS[i]}' is constant across the training split; its source data was not loaded")
 
