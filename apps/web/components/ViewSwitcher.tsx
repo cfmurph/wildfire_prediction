@@ -1,9 +1,9 @@
 "use client";
 
-import { Flame, Clock, TrendingUp, Map } from "lucide-react";
+import { Flame, Clock, Map } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type View = "current" | "history" | "predictions" | "risk";
+export type View = "current" | "history" | "risk";
 
 // The current season comes from BC's current-fire layer until it is archived
 const LAST_YEAR = new Date().getFullYear();
@@ -11,8 +11,7 @@ const LAST_YEAR = new Date().getFullYear();
 const VIEWS: { id: View; label: string; icon: React.ElementType; description: string }[] = [
   { id: "current",     label: "Current",     icon: Flame,      description: "Live hotspots + FWI" },
   { id: "history",     label: "History",     icon: Clock,      description: `BC fires 2006–${LAST_YEAR}` },
-  { id: "predictions", label: "Predictions", icon: TrendingUp, description: "Next-day spread" },
-  { id: "risk",        label: "Risk",        icon: Map,        description: "Monthly climatology" },
+  { id: "risk",        label: "Risk",        icon: Map,        description: "Where fires start" },
 ];
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -29,7 +28,7 @@ interface Props {
 export default function ViewSwitcher({ current, onChange, historyYear, onYearChange, riskMonth, onRiskMonthChange }: Props) {
   return (
     <div className="p-3 border-b border-gray-800 space-y-2">
-      <div className="grid grid-cols-2 gap-1">
+      <div className="grid grid-cols-3 gap-1">
         {VIEWS.map(({ id, label, icon: Icon, description }) => (
           <button
             key={id}

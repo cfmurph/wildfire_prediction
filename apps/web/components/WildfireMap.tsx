@@ -36,10 +36,9 @@ interface Props {
   riskLayers: { lightning: boolean; human: boolean };
   onFireSelect: (fire: SelectedFire) => void;
   selectedFire: SelectedFire | null;
-  onRiskPointClick: (point: { lat: number; lon: number }) => void;
 }
 
-export default function WildfireMap({ view, onCurrentData, historyYear, riskMonth, riskLayers, onFireSelect, selectedFire, onRiskPointClick }: Props) {
+export default function WildfireMap({ view, onCurrentData, historyYear, riskMonth, riskLayers, onFireSelect, selectedFire }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const popup = useRef<maplibregl.Popup | null>(null);
@@ -121,8 +120,6 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
       "active-fires-glow", "active-fires",
       "hotspots", "firms-wms",
       "history-fill", "history-outline",
-      "spread-p75", "spread-p50", "spread-p25",
-      "risk-heat",
       "ignition-lightning", "ignition-human",
       "fwi-stations",
     ];
@@ -132,8 +129,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     // Now safe to remove sources
     const sources = [
       "active-fires", "hotspots", "firms-wms",
-      "history-fill", "spread-p75", "spread-p50", "spread-p25",
-      "risk-heat", "ignition-lightning", "ignition-human", "fwi-stations",
+      "history-fill", "ignition-lightning", "ignition-human", "fwi-stations",
     ];
     sources.forEach(removeSource);
   }, [removeLayer, removeSource]);
@@ -271,200 +267,54 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     }
   }, [clearAllDataLayers, on, onFireSelect]);
 
-  // ── View: Predictions ─────────────────────────────────────────────────────
-  const loadPredictionsView = useCallback(async () => {
-    if (!map.current) return;
-    clearAllDataLayers();
-
-    // Load active fires first, then show spread forecast on click
-    try {
-      const res = await fetch(`${API}/api/v1/fires/active`);
-      const data = await res.json();
-      if (!data.features?.length) return;
-
-      map.current.addSource("active-fires", { type: "geojson", data });
-      map.current.addLayer({
-        id: "active-fires",
-        type: "circle",
-        source: "active-fires",
-        paint: {
-          "circle-radius": ["interpolate", ["linear"], ["get", "size_ha"], 0, 5, 1000, 9, 10000, 15, 100000, 24],
-          "circle-color": STATUS_COLOR,
-          "circle-opacity": 0.85,
-          "circle-stroke-color": "#111827",
-          "circle-stroke-width": 1.5,
-        },
-      });
-
-      on("click", "active-fires", async (e) => {
-        const f = e.features?.[0];
-        if (!f) return;
-        const fire = activeFire(f);
-        const { lat, lon } = fire;
-        onFireSelect(fire);
-
-        // No spread estimate without real weather
-        let stn: Record<string, number> | null = null;
-        try {
-          stn = await (await fetch(`${API}/api/v1/weather/nearest?lat=${lat}&lon=${lon}`)).json();
-        } catch {}
-        if (!stn) return;
-        try {
-          const sres = await fetch(
-            `${API}/api/v1/predict/spread?lat=${lat}&lon=${lon}&fwi=${stn.FWI}&isi=${stn.ISI}&wind_speed=${stn.wind_speed / 3.6}&wind_dir=${stn.wind_dir}&hours=24`
-          );
-          const spread = await sres.json();
-          addSpreadLayers(spread);
-        } catch {}
-      });
-    } catch {}
-  }, [clearAllDataLayers, on, onFireSelect]);
-
-  function addSpreadLayers(spread: GeoJSON.FeatureCollection) {
-    if (!map.current) return;
-    ["spread-p75", "spread-p50", "spread-p25"].forEach((id) => {
-      if (map.current!.getLayer(id)) map.current!.removeLayer(id);
-      if (map.current!.getSource(id)) map.current!.removeSource(id);
-    });
-
-    const byPercentile: Record<string, GeoJSON.Feature> = {};
-    for (const f of (spread as GeoJSON.FeatureCollection).features) {
-      const p = (f.properties as Record<string, string>)?.percentile;
-      if (p) byPercentile[p] = f;
-    }
-
-    const configs = [
-      { id: "spread-p75", key: "p75", color: "#fca5a5", opacity: 0.25 },
-      { id: "spread-p50", key: "p50", color: "#f97316", opacity: 0.40 },
-      { id: "spread-p25", key: "p25", color: "#ef4444", opacity: 0.55 },
-    ];
-
-    for (const { id, key, color, opacity } of configs) {
-      const feat = byPercentile[key];
-      if (!feat) continue;
-      map.current.addSource(id, { type: "geojson", data: { type: "FeatureCollection", features: [feat] } });
-      map.current.addLayer({
-        id,
-        type: "fill",
-        source: id,
-        paint: { "fill-color": color, "fill-opacity": opacity },
-      });
-    }
-  }
-
   // ── View: Risk ─────────────────────────────────────────────────────────────
   const loadRiskView = useCallback(async (month: number) => {
     if (!map.current) return;
     clearAllDataLayers();
 
-    // Load climatology risk surface AND ignition prediction in parallel
-    const [riskRes, ignitionRes] = await Promise.allSettled([
-      fetch(`${API}/api/v1/risk/monthly?month=${month}`),
-      fetch(`${API}/api/v1/ignition/causes?month=${month}`),
-    ]);
+    let causes: Record<"lightning" | "human", GeoJSON.FeatureCollection> | null = null;
+    try {
+      const res = await fetch(`${API}/api/v1/ignition/causes?month=${month}`);
+      if (res.ok) causes = await res.json();
+    } catch {}
+    if (!map.current || !causes) return;
 
-    // Climatology layer (background context)
-    if (riskRes.status === "fulfilled" && riskRes.value.ok) {
-      try {
-        const data = await riskRes.value.json();
-        if (data.features?.length) {
-          map.current.addSource("risk-heat", { type: "geojson", data });
-          map.current.addLayer({
-            id: "risk-heat",
-            type: "circle",
-            source: "risk-heat",
-            paint: {
-              "circle-radius": 20,
-              "circle-blur": 1.5,
-              "circle-opacity": 0.35,
-              "circle-color": [
-                "step", ["get", "burn_probability"],
-                "#22c55e", 0.03, "#eab308", 0.08, "#f97316", 0.18, "#ef4444",
-              ],
-            },
-          });
-        }
-      } catch {}
+    // The model's probabilities are not calibrated: size circles relative to this month's highest value
+    const peak = Math.max(1e-6, ...[causes.lightning, causes.human].flatMap((c) => c.features.map((f) => Number(f.properties?.prob) || 0)));
+    const layers = [
+      { id: "ignition-lightning", data: causes.lightning, color: "#3b82f6", stroke: "#1d4ed8" },
+      { id: "ignition-human",     data: causes.human,     color: "#f59e0b", stroke: "#d97706" },
+    ];
+    for (const { id, data, color, stroke } of layers) {
+      if (!data?.features?.length) continue;
+      map.current.addSource(id, { type: "geojson", data });
+      map.current.addLayer({
+        id,
+        type: "circle",
+        source: id,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["/", ["get", "prob"], peak], 0, 2, 1, 18],
+          "circle-color": color,
+          "circle-opacity": 0.7,
+          "circle-stroke-color": stroke,
+          "circle-stroke-width": 0.5,
+        },
+      });
     }
-
-    // Ignition prediction layer — lightning (blue) and human (orange) separately
-    if (ignitionRes.status === "fulfilled" && ignitionRes.value.ok) {
-      try {
-        const causes = await ignitionRes.value.json();
-
-        // Lightning-caused ignition risk (blue tones) — C: clickable for spread forecast
-        const lightning = causes.lightning;
-        if (lightning?.features?.length) {
-          map.current.addSource("ignition-lightning", { type: "geojson", data: lightning });
-          map.current.addLayer({
-            id: "ignition-lightning",
-            type: "circle",
-            source: "ignition-lightning",
-            paint: {
-              "circle-radius": ["interpolate", ["linear"], ["get", "prob"], 0, 8, 0.5, 22],
-              "circle-color": "#3b82f6",
-              "circle-opacity": 0.75,
-              "circle-stroke-color": "#1d4ed8",
-              "circle-stroke-width": 0.5,
-              "circle-blur": 0.3,
-            },
-          });
-          on("click", "ignition-lightning", (e) => {
-            const f = e.features?.[0];
-            if (!f?.geometry || f.geometry.type !== "Point") return;
-            const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
-            onRiskPointClick({ lat, lon });
-          });
-          on("mouseenter", "ignition-lightning", () => {
-            if (map.current) map.current.getCanvas().style.cursor = "crosshair";
-          });
-          on("mouseleave", "ignition-lightning", () => {
-            if (map.current) map.current.getCanvas().style.cursor = "";
-          });
-        }
-
-        // Human-caused ignition risk (amber tones) — also clickable
-        const human = causes.human;
-        if (human?.features?.length) {
-          map.current.addSource("ignition-human", { type: "geojson", data: human });
-          map.current.addLayer({
-            id: "ignition-human",
-            type: "circle",
-            source: "ignition-human",
-            paint: {
-              "circle-radius": ["interpolate", ["linear"], ["get", "prob"], 0, 7, 0.5, 18],
-              "circle-color": "#f59e0b",
-              "circle-opacity": 0.75,
-              "circle-stroke-color": "#d97706",
-              "circle-stroke-width": 0.5,
-              "circle-blur": 0.3,
-            },
-          });
-          on("click", "ignition-human", (e) => {
-            const f = e.features?.[0];
-            if (!f?.geometry || f.geometry.type !== "Point") return;
-            const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
-            onRiskPointClick({ lat, lon });
-          });
-          on("mouseenter", "ignition-human", () => {
-            if (map.current) map.current.getCanvas().style.cursor = "crosshair";
-          });
-          on("mouseleave", "ignition-human", () => {
-            if (map.current) map.current.getCanvas().style.cursor = "";
-          });
-        }
-      } catch {}
-    }
-  }, [clearAllDataLayers, on, onRiskPointClick]);
+  }, [clearAllDataLayers]);
 
   // ── React to view changes ──────────────────────────────────────────────────
   useEffect(() => {
     if (!map.current || !ready) return;
     if (view === "current")     loadCurrentView();
     if (view === "history")     loadHistoryView(historyYear);
-    if (view === "predictions") loadPredictionsView();
     if (view === "risk")        loadRiskView(riskMonth);
-  }, [ready, view, historyYear, riskMonth, loadCurrentView, loadHistoryView, loadPredictionsView, loadRiskView]);
+  }, [ready, view, historyYear, riskMonth, loadCurrentView, loadHistoryView, loadRiskView]);
+
+  // Each tab starts on the whole province (switching tabs also clears the selected fire)
+  useEffect(() => {
+    map.current?.flyTo({ center: BC_CENTER, zoom: BC_ZOOM });
+  }, [view]);
 
   // ── React to layer toggle changes (B) ─────────────────────────────────────
   useEffect(() => {
@@ -491,7 +341,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
   return (
     <div className="relative w-full h-full">
       <div ref={mapContainer} className="w-full h-full" />
-      {(view === "current" || view === "predictions") && <MapLegend showSpread={view === "predictions"} />}
+      {view === "current" && <MapLegend />}
       {view === "history" && <HistoryLegend summary={history} />}
     </div>
   );

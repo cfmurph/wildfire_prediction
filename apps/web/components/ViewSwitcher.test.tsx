@@ -23,9 +23,7 @@ describe("ViewSwitcher", () => {
     fireEvent.change(slider, { target: { value: "2017" } });
     expect(onYearChange).toHaveBeenCalledWith(2017);
 
-    fireEvent.click(screen.getByRole("button", { name: /Predictions/ }));
     fireEvent.click(screen.getByRole("button", { name: /Risk/ }));
-    expect(onChange).toHaveBeenCalledWith("predictions");
     expect(onChange).toHaveBeenCalledWith("risk");
   });
 });
