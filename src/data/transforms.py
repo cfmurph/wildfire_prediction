@@ -20,10 +20,17 @@ from typing import Callable
 import numpy as np
 import torch
 
+from src.utils.config import CHANNELS, VECTOR_CHANNEL_PAIRS
+
 
 # Index of PrevFireMask in the channel list (channel 17, 0-indexed)
 # This channel and burnp3_burn_prob (channel 18) are excluded from noise
 _MASK_CHANNEL_INDICES = {17, 18}
+
+# East and north component channels; spatial transforms must turn these with the pixels.
+# Channels sit at dim -3 for both (C, H, W) frames and (T, C, H, W) sequences.
+_EAST = [CHANNELS.index(e) for e, _ in VECTOR_CHANNEL_PAIRS]
+_NORTH = [CHANNELS.index(n) for _, n in VECTOR_CHANNEL_PAIRS]
 
 
 class RandomHorizontalFlip:
@@ -37,6 +44,7 @@ class RandomHorizontalFlip:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if random.random() < self.p:
             X = torch.flip(X, dims=[-1])
+            X[..., _EAST, :, :] *= -1     # mirrored east-west
             y = torch.flip(y, dims=[-1])
         return X, y
 
@@ -52,6 +60,7 @@ class RandomVerticalFlip:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if random.random() < self.p:
             X = torch.flip(X, dims=[-2])
+            X[..., _NORTH, :, :] *= -1    # mirrored north-south
             y = torch.flip(y, dims=[-2])
         return X, y
 
@@ -68,6 +77,11 @@ class RandomRot90:
         if random.random() < self.p:
             k = random.randint(1, 3)
             X = torch.rot90(X, k=k, dims=[-2, -1])
+            # rot90 turns the map 90° counter-clockwise per step: (east, north) → (-north, east)
+            for _ in range(k):
+                east = X[..., _EAST, :, :].clone()
+                X[..., _EAST, :, :] = -X[..., _NORTH, :, :]
+                X[..., _NORTH, :, :] = east
             y = torch.rot90(y, k=k, dims=[-2, -1])
         return X, y
 

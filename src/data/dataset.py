@@ -15,7 +15,7 @@ Both classes:
   - Return float32 tensors on CPU; DataLoader handles device placement
 
 Channel order follows CHANNELS in src/utils/config.py (19 channels total):
-  elevation, slope, aspect, wind_dir, wind_speed, temp_min, temp_max,
+  elevation, slope_east, slope_north, wind_u, wind_v, temp_min, temp_max,
   humidity, precip, FFMC, DMC, DC, ISI, BUI, FWI, NDVI, landcover,
   PrevFireMask, burnp3_burn_prob
 """

@@ -91,8 +91,8 @@ def synthetic_dataset(tmp_path):
         (splits_dir / f"{split}.json").write_text(json.dumps(records))
 
     # Write dummy stats
-    stats = {ch: {"mean": 0.5, "std": 0.3} for ch in ["elevation", "slope", "aspect",
-        "wind_dir", "wind_speed", "temp_min", "temp_max", "humidity", "precip",
+    stats = {ch: {"mean": 0.5, "std": 0.3} for ch in ["elevation", "slope_east", "slope_north",
+        "wind_u", "wind_v", "temp_min", "temp_max", "humidity", "precip",
         "FFMC", "DMC", "DC", "ISI", "BUI", "FWI", "NDVI", "landcover",
         "PrevFireMask", "burnp3_burn_prob"]}
     (stats_dir / "channel_stats.json").write_text(json.dumps(stats))
@@ -249,6 +249,11 @@ class TestWildfireSequenceDataset:
 # Transforms tests
 # ---------------------------------------------------------------------------
 
+def _vector_channels() -> set[int]:
+    from src.utils.config import CHANNELS, VECTOR_CHANNEL_PAIRS
+    return {CHANNELS.index(c) for pair in VECTOR_CHANNEL_PAIRS for c in pair}
+
+
 class TestTransforms:
     def _make_tensors(self):
         X = torch.rand(N_CHANNELS, PATCH_SIZE, PATCH_SIZE)
@@ -260,7 +265,8 @@ class TestTransforms:
         X, y = self._make_tensors()
         t = RandomHorizontalFlip(p=1.0)
         X_out, y_out = t(X, y)
-        assert torch.allclose(X_out, torch.flip(X, dims=[-1]))
+        scalar = [i for i in range(N_CHANNELS) if i not in _vector_channels()]
+        assert torch.allclose(X_out[scalar], torch.flip(X, dims=[-1])[scalar])
         assert torch.allclose(y_out, torch.flip(y, dims=[-1]))
 
     def test_vflip_changes_values(self):
@@ -268,7 +274,8 @@ class TestTransforms:
         X, y = self._make_tensors()
         t = RandomVerticalFlip(p=1.0)
         X_out, y_out = t(X, y)
-        assert torch.allclose(X_out, torch.flip(X, dims=[-2]))
+        scalar = [i for i in range(N_CHANNELS) if i not in _vector_channels()]
+        assert torch.allclose(X_out[scalar], torch.flip(X, dims=[-2])[scalar])
 
     def test_rot90_preserves_shape(self):
         from src.data.transforms import RandomRot90
@@ -277,6 +284,26 @@ class TestTransforms:
         X_out, y_out = t(X, y)
         assert X_out.shape == X.shape
         assert y_out.shape == y.shape
+
+    @pytest.mark.parametrize("seed", range(8))
+    def test_wind_still_points_from_fire_to_new_burn(self, seed):
+        """After any flip/rotation, the wind vector must point from the fire to where it spread."""
+        import random
+        from src.data.transforms import build_train_transforms
+        from src.utils.config import CHANNELS
+        u, v = CHANNELS.index("wind_u"), CHANNELS.index("wind_v")
+        X = torch.zeros(N_CHANNELS, PATCH_SIZE, PATCH_SIZE)
+        y = torch.zeros(PATCH_SIZE, PATCH_SIZE)
+        X[CHANNELS.index("PrevFireMask"), 32, 32] = 1.0
+        y[31, 33] = 1.0                       # spread one pixel north-east (row 0 is north)
+        X[u], X[v] = 1.0, 1.0                 # wind blowing toward the north-east
+
+        random.seed(seed)
+        X_out, y_out = build_train_transforms(1.0 if seed % 2 else 0.0, 1.0 if seed % 4 > 1 else 0.0, 1.0, 0.0)(X, y)
+        fire = torch.nonzero(X_out[CHANNELS.index("PrevFireMask")])[0]
+        burn = torch.nonzero(y_out)[0]
+        d_row, d_col = (burn - fire).tolist()
+        assert (X_out[u, 0, 0].item(), X_out[v, 0, 0].item()) == (d_col, -d_row)
 
     def test_noise_preserves_mask_channels(self):
         """Noise should NOT be applied to PrevFireMask (ch 17) or burnp3 (ch 18)."""
@@ -314,7 +341,7 @@ class TestChannelStats:
         from src.data.dataset import ChannelStats
         # Write stats with known mean=5.0, std=2.0 for all channels
         stats_dict = {ch: {"mean": 5.0, "std": 2.0} for ch in [
-            "elevation", "slope", "aspect", "wind_dir", "wind_speed",
+            "elevation", "slope_east", "slope_north", "wind_u", "wind_v",
             "temp_min", "temp_max", "humidity", "precip", "FFMC", "DMC",
             "DC", "ISI", "BUI", "FWI", "NDVI", "landcover", "PrevFireMask",
             "burnp3_burn_prob",
@@ -324,3 +351,26 @@ class TestChannelStats:
         X = np.full((N_CHANNELS, PATCH_SIZE, PATCH_SIZE), 5.0, dtype=np.float32)
         X_norm = stats.normalize(X)
         np.testing.assert_allclose(X_norm, 0.0, atol=1e-5)
+
+
+def test_channel_stats_give_vector_pairs_zero_mean_and_one_scale(tmp_path):
+    from src.data.assemble import compute_channel_stats
+    from src.utils.config import CHANNELS
+    X = np.ones((N_CHANNELS, 4, 4), dtype=np.float32)
+    X[CHANNELS.index("wind_u")] = 3.0
+    X[CHANNELS.index("wind_v")] = 4.0
+    np.savez(tmp_path / "p.npz", X=X, y=np.zeros((4, 4), dtype=np.float32))
+    (tmp_path / "train.json").write_text(json.dumps([{"patch_id": "p"}]))
+    compute_channel_stats(tmp_path, tmp_path / "train.json", tmp_path)
+    stats = json.loads((tmp_path / "channel_stats.json").read_text())
+    assert stats["wind_u"] == stats["wind_v"] == {"mean": 0.0, "std": pytest.approx(np.sqrt(12.5))}
+    assert stats["FWI"] == {"mean": 1.0, "std": 0.0}
+
+
+def test_synthetic_spread_follows_diagonal_wind():
+    from src.data.assemble import generate_daily_masks
+    final = np.ones((41, 41), dtype=np.float32)
+    # Wind from the south-west pushes the fire north-east (up and right in the array)
+    day1 = generate_daily_masks(final, 3, [40.0] * 3, [15.0] * 3, [225.0] * 3, [10.0] * 3)[1]
+    assert day1[20 - 3, 20 + 3] and day1[20 + 3, 20 - 3]          # along the wind axis
+    assert not day1[20 - 3, 20 - 3] and not day1[20 + 3, 20 + 3]  # across it

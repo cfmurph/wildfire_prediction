@@ -18,10 +18,10 @@ data:
   fwi_source: zenodo
   channels:
     - elevation
-    - slope
-    - aspect
-    - wind_dir
-    - wind_speed
+    - slope_east
+    - slope_north
+    - wind_u
+    - wind_v
     - temp_min
     - temp_max
     - humidity
