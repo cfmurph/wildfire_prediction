@@ -32,6 +32,9 @@ BC_HISTORICAL_WFS = (
     "&count=2000"
 )
 
+# The current season's perimeters live here until BC archives them into the layer above
+BC_CURRENT_WFS = BC_HISTORICAL_WFS.replace("PROT_HISTORICAL_FIRE_POLYS_SP", "PROT_CURRENT_FIRE_POLYS_SP")
+
 
 async def get_active_fires() -> dict:
     """
@@ -81,13 +84,19 @@ async def get_active_fires() -> dict:
 
 async def get_historical_perimeters(year: int) -> dict:
     """
-    Fetch BC historical fire perimeters for a given year.
-    Uses the public WFS endpoint — returns up to 2000 features.
+    Fetch BC fire perimeters for a given year (up to 2000 features).
+    Falls back to the current-season layer for a year BC has not archived yet.
     """
-    url = BC_HISTORICAL_WFS.format(year=year)
+    data = await _get_perimeters(BC_HISTORICAL_WFS, year)
+    if not data["features"]:
+        data = await _get_perimeters(BC_CURRENT_WFS, year)
+    return data
+
+
+async def _get_perimeters(url_template: str, year: int) -> dict:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url)
+            resp = await client.get(url_template.format(year=year))
             resp.raise_for_status()
             data = resp.json()
 
@@ -106,16 +115,16 @@ async def get_historical_perimeters(year: int) -> dict:
                 "fire_number": props.get("FIRE_NUMBER", ""),
                 "fire_year": fire_year,
                 "size_ha": _as_float(props.get("FIRE_SIZE_HECTARES")),
-                "fire_cause": props.get("FIRE_CAUSE", ""),
-                "ignition_date": props.get("IGN_DATE", ""),
-                "out_date": props.get("OUT_DATE", ""),
+                "fire_cause": props.get("FIRE_CAUSE") or "",           # archived layer only
+                "ignition_date": (props.get("FIRE_DATE") or "").rstrip("Z"),
+                "fire_status": props.get("FIRE_STATUS") or "",         # current-season layer only
             }
             kept.append(feat)
         data["features"] = kept
         return data
 
     except Exception as exc:
-        log.error("BC historical perimeters fetch failed for %s (%s)", year, type(exc).__name__)
+        log.error("BC fire perimeters fetch failed for %s (%s)", year, type(exc).__name__)
         return {"type": "FeatureCollection", "features": []}
 
 

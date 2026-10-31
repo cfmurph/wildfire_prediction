@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Query
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Query
 from api.services import firms, bc_fires
 
 router = APIRouter()
@@ -17,6 +19,8 @@ async def hotspots(days: int = Query(default=1, ge=1, le=10)):
 
 
 @router.get("/history")
-async def history(year: int = Query(default=2023, ge=2006, le=2024)):
-    """BC historical fire perimeters for a given year."""
+async def history(year: int = Query(default=2023, ge=2006)):
+    """BC fire perimeters for a given year, including the current season."""
+    if year > date.today().year:
+        raise HTTPException(422, "year is in the future")
     return await bc_fires.get_historical_perimeters(year=year)
