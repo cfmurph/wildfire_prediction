@@ -17,6 +17,16 @@ const urgency = (status: unknown) => {
 /** Province-wide overview for the Current and Predictions views when no fire is selected. */
 export default function CurrentSummary({ data, onSelect }: Props) {
   if (!data) return <p className="p-4 text-sm text-gray-500">Loading fires…</p>;
+  if (!data.fires) {
+    return (
+      <div className="m-4 p-3 rounded-lg bg-red-950/40 border border-red-900 text-sm text-red-300">
+        <p className="font-semibold">Fire data is unavailable right now</p>
+        <p className="text-xs mt-1 text-red-300/80">
+          This is not the same as no fires. Check the BC Wildfire Service dashboard for current information.
+        </p>
+      </div>
+    );
+  }
 
   const props = (f: GeoJSON.Feature) => (f.properties ?? {}) as Record<string, unknown>;
   // Fires of note first, then most urgent stage of control, then largest
@@ -50,10 +60,10 @@ export default function CurrentSummary({ data, onSelect }: Props) {
       </div>
 
       <div className="text-xs text-gray-400 space-y-0.5">
-        <p>{data.hotspots.length.toLocaleString()} satellite hotspots in the last 24 h</p>
+        <p>{data.hotspots.length.toLocaleString()} satellite hotspots in and near BC, last 24 h</p>
         <p>
           {data.stations > 0
-            ? `${data.stations} BC weather stations reporting FWI`
+            ? `${data.stations} weather stations in and near BC reporting FWI`
             : "No BC weather stations reporting FWI (usual outside the fire season)"}
         </p>
       </div>

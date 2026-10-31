@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { View } from "./ViewSwitcher";
 import { SelectedFire } from "@/app/page";
-import { FIRE_STATUSES } from "@/lib/utils";
-import MapLegend from "./MapLegend";
+import { FIRE_STATUSES, HISTORY_SIZES } from "@/lib/utils";
+import MapLegend, { HistoryLegend, HistorySummary } from "./MapLegend";
 import { activeFire, CurrentData } from "@/lib/fires";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -45,6 +45,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
   const popup = useRef<maplibregl.Popup | null>(null);
   // Layer event handlers registered by the current view; removed on view change so they don't pile up
   const handlers = useRef<[LayerEvent, string, (e: maplibregl.MapLayerMouseEvent) => void][]>([]);
+  const [history, setHistory] = useState<HistorySummary>(null);
 
   const on = useCallback((type: LayerEvent, layer: string, fn: (e: maplibregl.MapLayerMouseEvent) => void) => {
     map.current?.on(type, layer, fn);
@@ -82,6 +83,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
       },
       center: BC_CENTER,
       zoom: BC_ZOOM,
+      attributionControl: { compact: true },
     });
 
     map.current.addControl(new maplibregl.NavigationControl(), "bottom-right");
@@ -137,7 +139,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
   const loadCurrentView = useCallback(async () => {
     if (!map.current) return;
     clearAllDataLayers();
-    const getJson = (path: string) => fetch(`${API}${path}`).then((r) => r.json()).catch(() => null);
+    const getJson = (path: string) => fetch(`${API}${path}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
     const [fires, hotspots, stations] = await Promise.all([
       getJson("/api/v1/fires/active"),
       getJson("/api/v1/fires/hotspots?days=1"),
@@ -145,7 +147,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     ]);
     if (!map.current) return;
     onCurrentData({
-      fires: fires?.features ?? [],
+      fires: fires?.features ?? null,
       hotspots: hotspots?.features ?? [],
       stations: stations?.features?.length ?? 0,
       updated: new Date(),
@@ -212,11 +214,20 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
   const loadHistoryView = useCallback(async (year: number) => {
     if (!map.current) return;
     clearAllDataLayers();
+    setHistory(null);
 
     try {
       const res = await fetch(`${API}/api/v1/fires/history?year=${year}`);
+      if (!res.ok) throw new Error(`API ${res.status}`);
       const data = await res.json();
-      if (!data.features?.length) return;
+      if (!map.current) return;
+      const features: GeoJSON.Feature[] = data.features ?? [];
+      setHistory({
+        year,
+        count: features.length,
+        ha: features.reduce((sum, f) => sum + (Number(f.properties?.size_ha) || 0), 0),
+      });
+      if (!features.length) return;
 
       map.current.addSource("history-fill", { type: "geojson", data });
       map.current.addLayer({
@@ -226,8 +237,8 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
         paint: {
           "fill-color": [
             "interpolate", ["linear"], ["get", "size_ha"],
-            0, "#fef9c3", 100, "#fde047", 1000, "#f97316", 10000, "#dc2626", 100000, "#7c3aed",
-          ],
+            ...HISTORY_SIZES.flatMap((s) => [s.ha, s.color]),
+          ] as unknown as maplibregl.ExpressionSpecification,
           "fill-opacity": 0.55,
         },
       });
@@ -245,7 +256,6 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
         const centroid = e.lngLat;
         onFireSelect({
           fire_id: String(props.fire_number || ""),
-          fire_name: String(props.fire_number || ""),
           lat: centroid.lat,
           lon: centroid.lng,
           size_ha: Number(props.size_ha) || 0,
@@ -253,7 +263,9 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
           properties: props,
         });
       });
-    } catch {}
+    } catch {
+      setHistory("error");
+    }
   }, [clearAllDataLayers, on, onFireSelect]);
 
   // ── View: Predictions ─────────────────────────────────────────────────────
@@ -482,6 +494,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     <div className="relative w-full h-full">
       <div ref={mapContainer} className="w-full h-full" />
       {(view === "current" || view === "predictions") && <MapLegend showSpread={view === "predictions"} />}
+      {view === "history" && <HistoryLegend summary={history} />}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import type { SelectedFire } from "@/app/page";
 
 export type CurrentData = {
-  fires: GeoJSON.Feature[];
+  fires: GeoJSON.Feature[] | null;  // null when the fire data could not be loaded
   hotspots: GeoJSON.Feature[];
   stations: number;
   updated: Date;
