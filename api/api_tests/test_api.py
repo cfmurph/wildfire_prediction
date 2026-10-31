@@ -203,7 +203,25 @@ def test_history_tolerates_a_bad_size(client, monkeypatch):
 
 def test_history_year_bounds(client):
     assert client.get("/api/v1/fires/history?year=2005").status_code == 422
-    assert client.get("/api/v1/fires/history?year=2025").status_code == 422
+    from datetime import date
+    assert client.get(f"/api/v1/fires/history?year={date.today().year + 1}").status_code == 422
+
+
+def test_history_falls_back_to_the_current_season_layer(client, monkeypatch):
+    perimeter = {
+        "type": "Feature",
+        "properties": {"FIRE_NUMBER": "G1", "FIRE_YEAR": 2026, "FIRE_SIZE_HECTARES": 3, "FIRE_STATUS": "Out"},
+        "geometry": {"type": "Polygon", "coordinates": [[[-123, 50], [-123, 50.1], [-122.9, 50], [-123, 50]]]},
+    }
+
+    def respond(url: str):
+        current = "PROT_CURRENT_FIRE_POLYS_SP" in url
+        return _http_response(url, json_data={"type": "FeatureCollection", "features": [perimeter] if current else []})
+
+    _install_async(monkeypatch, respond)
+    props = client.get("/api/v1/fires/history?year=2026").json()["features"][0]["properties"]
+    assert props["fire_number"] == "G1"
+    assert props["fire_status"] == "Out"
 
 
 def test_predict_and_risk_are_local_heuristics(client):

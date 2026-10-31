@@ -5,9 +5,12 @@ import { cn } from "@/lib/utils";
 
 export type View = "current" | "history" | "predictions" | "risk";
 
+// The current season comes from BC's current-fire layer until it is archived
+const LAST_YEAR = new Date().getFullYear();
+
 const VIEWS: { id: View; label: string; icon: React.ElementType; description: string }[] = [
   { id: "current",     label: "Current",     icon: Flame,      description: "Live hotspots + FWI" },
-  { id: "history",     label: "History",     icon: Clock,      description: "BC fires 2006–2025" },
+  { id: "history",     label: "History",     icon: Clock,      description: `BC fires 2006–${LAST_YEAR}` },
   { id: "predictions", label: "Predictions", icon: TrendingUp, description: "Next-day spread" },
   { id: "risk",        label: "Risk",        icon: Map,        description: "Monthly climatology" },
 ];
@@ -92,12 +95,14 @@ export default function ViewSwitcher({ current, onChange, historyYear, onYearCha
         <div className="pt-1">
           <div className="flex justify-between text-xs text-gray-400 mb-1">
             <span>Year</span>
-            <span className="font-semibold text-orange-400">{historyYear}</span>
+            <span className="font-semibold text-orange-400">
+              {historyYear}{historyYear === LAST_YEAR && " (season to date)"}
+            </span>
           </div>
           <input
             type="range"
             min={2006}
-            max={2025}
+            max={LAST_YEAR}
             value={historyYear}
             onChange={(e) => onYearChange(Number(e.target.value))}
             className="w-full accent-orange-500 cursor-pointer"
@@ -106,6 +111,7 @@ export default function ViewSwitcher({ current, onChange, historyYear, onYearCha
             <span>2006</span>
             <span>2017 🔥</span>
             <span>2023 🔥</span>
+            <span>{LAST_YEAR}</span>
           </div>
         </div>
       )}
