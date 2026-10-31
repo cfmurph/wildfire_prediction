@@ -15,12 +15,11 @@ Usage:
 
 Expected raw data structure (after running download_canada.py):
   data/raw/bc_perimeters/*.geojson or *.shp
-  data/raw/era5/era5_YYYY.nc
-  data/raw/fwi/{FFMC,DMC,DC,ISI,BUI,FWI}/*.nc  (Zenodo ERA5-HRS)
-  data/raw/fwi/{FFMC,DMC,DC,ISI,BUI,FWI}/*.tif (CWFIS operational)
-  data/raw/cdem/...
+  data/raw/era5/era5_YYYY_hourly_{instant,accum}.nc
+  data/raw/fwi/cems_fwi_YYYY.nc
+  data/raw/cdem/cdem_bc_srtm90.tif
   data/raw/modis_ndvi/...
-  data/raw/landcover/...
+  data/raw/landcover/landcover-2020-classification.tif
 """
 
 from __future__ import annotations

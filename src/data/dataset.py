@@ -256,9 +256,10 @@ class WildfireSequenceDataset(Dataset):
         # Build sequence windows: (list_of_T_records, target_record)
         self.sequences: list[tuple[list[dict], dict]] = []
         for fid, days in fire_days.items():
-            for i in range(len(days) - seq_len):
+            for i in range(len(days) - seq_len + 1):
                 input_records = days[i : i + seq_len]
-                target_record = days[i + seq_len]
+                # A patch's y is already the next-day mask, so the last input day carries the target
+                target_record = input_records[-1]
                 self.sequences.append((input_records, target_record))
 
         log.info(

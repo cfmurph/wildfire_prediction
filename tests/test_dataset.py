@@ -240,6 +240,9 @@ class TestWildfireSequenceDataset:
             pytest.skip("Insufficient patches")
         X_seq, y = seq_ds[0]
         assert X_seq.shape[0] == 1   # T=1
+        last_input = seq_ds.sequences[0][0][-1]
+        npz = np.load(ds["patches_dir"] / f"{last_input['patch_id']}.npz")
+        assert torch.equal(y, torch.from_numpy(npz["y"].astype(np.float32)))  # next day, not two
 
 
 # ---------------------------------------------------------------------------

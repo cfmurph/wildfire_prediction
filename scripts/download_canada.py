@@ -10,7 +10,7 @@ Prediction benchmark:
   3. ERA5 weather reanalysis         (Copernicus CDS)
   4. ERA5-HRS FWI indices            (Zenodo, McElhinny et al. 2020)
      — overwintered DC recommended for western Canada
-  5. CWFIS operational FWI           (NRCan datamart, 2019–2023 fallback)
+  5. CEMS fire danger reanalysis     (EWDS, FWI indices for all years)
   6. Canadian Digital Elevation Model (CDEM, NRCan)
   7. Canada Land Cover 2020          (NRCan)
   8. MODIS MOD13A2 NDVI              (NASA LP DAAC via earthaccess)
@@ -32,11 +32,13 @@ Notes
 from __future__ import annotations
 
 import argparse
+import itertools
 import logging
 import os
 import sys
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -297,7 +299,9 @@ def download_firms_hotspots(
 
 def download_era5(dest_dir: Path, years: list[int]) -> None:
     """
-    Download daily ERA5 surface variables for BC from the Copernicus CDS.
+    Download sub-daily ERA5 surface variables for BC from the Copernicus CDS.
+    Assembly aggregates them to local-day values (min/max temperature,
+    afternoon wind and humidity, 24 h precipitation).
 
     Variables:
       - 10m_u_component_of_wind  (u10)
@@ -308,7 +312,7 @@ def download_era5(dest_dir: Path, years: list[int]) -> None:
 
     Requires ~/.cdsapirc with UID and API key from https://cds.climate.copernicus.eu
 
-    Format: NetCDF, one file per year-month
+    Format: NetCDF, era5_YYYY_hourly_{instant,accum}.nc
     """
     log.info("=== ERA5 weather reanalysis ===")
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -327,45 +331,66 @@ def download_era5(dest_dir: Path, years: list[int]) -> None:
         )
         return
 
-    c = cdsapi.Client(quiet=True)
     bb = BC_BBOX
 
     fire_months = [str(m).zfill(2) for m in range(4, 11)]  # April–October
 
-    for year in years:
-        out = dest_dir / f"era5_{year}.nc"
-        if out.exists():
-            log.info(f"  already exists: {out.name}")
-            continue
+    # Instant and accumulated variables come back as separate files, so request them separately
+    requests_by_kind = {
+        "instant": [
+            "10m_u_component_of_wind",
+            "10m_v_component_of_wind",
+            "2m_temperature",
+            "2m_dewpoint_temperature",
+        ],
+        "accum": ["total_precipitation"],
+    }
+    # Every 3 h is enough for daily min/max and lands on 23 UTC (16:00 PDT);
+    # precipitation is summed, so it needs every hour.
+    hours = {
+        "instant": [f"{h:02d}:00" for h in range(2, 24, 3)],
+        "accum": [f"{h:02d}:00" for h in range(24)],
+    }
 
-        log.info(f"  Requesting ERA5 {year} (fire season months Apr–Oct)…")
+    # CDS rejects more than a couple of queued requests per user, and each waits up to
+    # ~1.5 h, so keep requests few and large: one per year and kind, two at a time.
+    jobs = [
+        (year, kind, variables)
+        for year, (kind, variables) in itertools.product(years, requests_by_kind.items())
+        if not (dest_dir / f"era5_{year}_hourly_{kind}.nc").exists()
+    ]
+
+    def fetch(job) -> None:
+        year, kind, variables = job
+        out = dest_dir / f"era5_{year}_hourly_{kind}.nc"
+        part = out.with_suffix(".part")
+        log.info(f"  Requesting ERA5 {year} {kind}…")
         try:
-            c.retrieve(
+            cdsapi.Client(quiet=True, progress=False).retrieve(
                 "reanalysis-era5-single-levels",
                 {
-                    "product_type": "reanalysis",
-                    "variable": [
-                        "10m_u_component_of_wind",
-                        "10m_v_component_of_wind",
-                        "2m_temperature",
-                        "2m_dewpoint_temperature",
-                        "total_precipitation",
-                    ],
-                    "year": str(year),
+                    "product_type": ["reanalysis"],
+                    "variable": variables,
+                    "year": [str(year)],
                     "month": fire_months,
                     "day": [str(d).zfill(2) for d in range(1, 32)],
-                    "time": "12:00",     # daily noon snapshot
+                    "time": hours[kind],
                     "area": [
                         bb["lat_max"], bb["lon_min"],
                         bb["lat_min"], bb["lon_max"],
                     ],
-                    "format": "netcdf",
+                    "data_format": "netcdf",
+                    "download_format": "unarchived",
                 },
-                str(out),
+                str(part),
             )
+            part.rename(out)
             log.info(f"  Saved → {out}")
         except Exception as exc:
-            log.error(f"  ERA5 {year} failed: {exc}")
+            log.error(f"  ERA5 {year} {kind} failed: {exc}")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(fetch, jobs))
 
 
 # ---------------------------------------------------------------------------
@@ -384,8 +409,8 @@ def download_fwi_zenodo(
     Uses the overwintered DC version (recommended for western Canada).
     Coverage: 1979–2018 (daily, global, NetCDF).
 
-    For years > 2018 (i.e., 2019–2023 test split), fall back to CWFIS
-    operational data (see download_cwfis_fwi).
+    Used only for the API's FWI climatology; patch channels come from
+    download_fwi_cems, which covers every year.
 
     Variables: FFMC, DMC, DC, ISI, BUI, FWI (DSR optional)
     """
@@ -445,45 +470,64 @@ def download_fwi_zenodo(
 
 
 # ---------------------------------------------------------------------------
-# 5. CWFIS Operational FWI (2019–2023 fallback)
+# 5. CEMS fire danger reanalysis (FWI for every year, used by assembly)
 # ---------------------------------------------------------------------------
 
-def download_cwfis_fwi(dest_dir: Path, years: list[int]) -> None:
+def download_fwi_cems(dest_dir: Path, years: list[int]) -> None:
     """
-    Download operational FWI rasters from the NRCan CWFIS Datamart.
+    Download the six FWI indices for BC from the Copernicus CEMS fire danger
+    reanalysis (GEFF-ERA5, 0.25°), one file per fire season: cems_fwi_YYYY.nc.
 
-    Used for years not covered by the Zenodo ERA5-HRS dataset (i.e., >2018).
-    Format: GeoTIFF, one file per day per variable.
-
-    CWFIS Datamart: https://cwfis.cfs.nrcan.gc.ca/datamart
+    One source for every year, so train, val and test see the same product.
+    Hosted on the Early Warning Data Store, which takes the CDS key once
+    https://ewds.climate.copernicus.eu/licences/terms-of-use-cems is accepted.
     """
-    log.info("=== CWFIS operational FWI (2019+) ===")
+    log.info("=== CEMS fire danger reanalysis (FWI) ===")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    cwfis_years = [y for y in years if y > 2018]
-    if not cwfis_years:
-        log.info("  No post-2018 years requested; CWFIS fallback not needed.")
-        return
+    import cdsapi
+    from cdsapi.api import read_config
 
-    base_url = "https://cwfis.cfs.nrcan.gc.ca/datamart/fwi"
-    variables = ["FFMC", "DMC", "DC", "ISI", "BUI", "FWI"]
+    key = read_config(str(Path.home() / ".cdsapirc"))["key"]
+    bb = BC_BBOX
+    jobs = [y for y in years if not (dest_dir / f"cems_fwi_{y}.nc").exists()]
 
-    import pandas as pd
+    def fetch(year: int) -> None:
+        out = dest_dir / f"cems_fwi_{year}.nc"
+        part = out.with_suffix(".part")
+        log.info(f"  Requesting CEMS FWI {year}…")
+        try:
+            cdsapi.Client(url="https://ewds.climate.copernicus.eu/api", key=key, quiet=True, progress=False).retrieve(
+                "cems-fire-historical-v1",
+                {
+                    "product_type": "reanalysis",
+                    "dataset_type": "consolidated_dataset",
+                    "system_version": ["4_1"],
+                    "variable": [
+                        "fine_fuel_moisture_code",
+                        "duff_moisture_code",
+                        "drought_code",
+                        "initial_fire_spread_index",
+                        "build_up_index",
+                        "fire_weather_index",
+                    ],
+                    "year": [str(year)],
+                    "month": [str(m).zfill(2) for m in range(4, 11)],
+                    "day": [str(d).zfill(2) for d in range(1, 32)],
+                    "grid": "0.25/0.25",
+                    "area": [bb["lat_max"], bb["lon_min"], bb["lat_min"], bb["lon_max"]],
+                    "data_format": "netcdf",
+                },
+                str(part),
+            )
+            part.rename(out)
+            log.info(f"  Saved → {out}")
+        except Exception as exc:
+            log.error(f"  CEMS FWI {year} failed: {exc}")
 
-    for year in cwfis_years:
-        dates = pd.date_range(f"{year}-04-01", f"{year}-10-31", freq="D")
-        for date in tqdm(dates, desc=f"CWFIS FWI {year}"):
-            date_str = date.strftime("%Y%m%d")
-            for var in variables:
-                out = dest_dir / var.lower() / f"{var}_{date_str}.tif"
-                if out.exists():
-                    continue
-                out.parent.mkdir(parents=True, exist_ok=True)
-                url = f"{base_url}/{var.lower()}/{date_str}/{var}_{date_str}.tif"
-                try:
-                    _download_file(url, out)
-                except Exception:
-                    pass  # Many days may be missing; silent skip
+    # The store rejects a second queued request per user, so strictly one at a time
+    for year in jobs:
+        fetch(year)
 
 
 # ---------------------------------------------------------------------------
@@ -813,8 +857,8 @@ def main() -> None:
     # 4. ERA5-HRS FWI (Zenodo, 2012–2018)
     download_fwi_zenodo(data_dir / "fwi", years)
 
-    # 5. CWFIS operational FWI (2019–2023 fallback)
-    download_cwfis_fwi(data_dir / "fwi", years)
+    # 5. CEMS FWI, all years (the patch channels)
+    download_fwi_cems(data_dir / "fwi", years)
 
     # 6. CDEM
     download_cdem(data_dir / "cdem")
