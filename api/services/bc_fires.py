@@ -8,6 +8,7 @@ Historical:   BC Data Catalogue perimeters (local download or public WFS)
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
@@ -62,7 +63,10 @@ async def get_active_fires() -> dict:
                 "fire_cause": props.get("FIRE_CAUSE") or props.get("fire_cause", ""),
                 "fire_status": props.get("FIRE_STATUS") or props.get("fire_status", ""),
                 "stage_of_control": props.get("STAGE_OF_CONTROL") or "",
-                "ignition_date": props.get("IGNITION_DATE") or "",
+                "ignition_date": _epoch_ms_to_date(props.get("IGNITION_DATE")),
+                "location": props.get("GEOGRAPHIC_DESCRIPTION") or "",
+                "fire_url": props.get("FIRE_URL") or "",
+                "fire_of_note": props.get("FIRE_OF_NOTE_IND") == "Y",
                 "lat": lat,
                 "lon": lon,
             }
@@ -137,3 +141,11 @@ def _point_lat_lon(feat: dict) -> tuple[float, float] | None:
     if lat != lat or lon != lon:
         return None
     return lat, lon
+
+
+def _epoch_ms_to_date(value) -> str:
+    """ArcGIS dates are epoch milliseconds; return YYYY-MM-DD, or "" if missing."""
+    try:
+        return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).date().isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return ""
