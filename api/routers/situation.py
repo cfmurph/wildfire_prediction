@@ -1,3 +1,4 @@
+import os
 import time
 from collections import deque
 from fastapi import APIRouter, HTTPException
@@ -30,6 +31,12 @@ class SituationRequest(BaseModel):
 class SituationResponse(BaseModel):
     report: str
     spread_geojson: dict
+
+
+@router.get("/available")
+async def situation_available():
+    """Whether AI briefings are configured; the UI hides the report button otherwise."""
+    return {"available": bool(os.environ.get("XAI_API_KEY"))}
 
 
 @router.post("", response_model=SituationResponse)

@@ -5,6 +5,9 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { View } from "./ViewSwitcher";
 import { SelectedFire } from "@/app/page";
+import { FIRE_STATUSES } from "@/lib/utils";
+import MapLegend from "./MapLegend";
+import { activeFire, CurrentData } from "@/lib/fires";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -16,8 +19,18 @@ const BC_ZOOM = 5;
 const FIRMS_WMS_TILES =
   "https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=fires_viirs_snpp&STYLES=&FORMAT=image/png&TRANSPARENT=true&CRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}";
 
+type LayerEvent = "click" | "mouseenter" | "mouseleave";
+
+// Fire circles coloured by BCWS stage of control; grey if unknown
+const STATUS_COLOR: maplibregl.ExpressionSpecification = [
+  "match", ["get", "fire_status"],
+  ...FIRE_STATUSES.flatMap((s) => [s.status, s.color]),
+  "#9ca3af",
+] as unknown as maplibregl.ExpressionSpecification;
+
 interface Props {
   view: View;
+  onCurrentData: (data: CurrentData) => void;
   historyYear: number;
   riskMonth: number;
   riskLayers: { lightning: boolean; human: boolean };
@@ -26,10 +39,17 @@ interface Props {
   onRiskPointClick: (point: { lat: number; lon: number }) => void;
 }
 
-export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, onFireSelect, selectedFire, onRiskPointClick }: Props) {
+export default function WildfireMap({ view, onCurrentData, historyYear, riskMonth, riskLayers, onFireSelect, selectedFire, onRiskPointClick }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const popup = useRef<maplibregl.Popup | null>(null);
+  // Layer event handlers registered by the current view; removed on view change so they don't pile up
+  const handlers = useRef<[LayerEvent, string, (e: maplibregl.MapLayerMouseEvent) => void][]>([]);
+
+  const on = useCallback((type: LayerEvent, layer: string, fn: (e: maplibregl.MapLayerMouseEvent) => void) => {
+    map.current?.on(type, layer, fn);
+    handlers.current.push([type, layer, fn]);
+  }, []);
 
   // ── Bootstrap map ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -101,6 +121,8 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
       "ignition-lightning", "ignition-human",
       "fwi-stations",
     ];
+    handlers.current.forEach(([type, layer, fn]) => map.current?.off(type, layer, fn));
+    handlers.current = [];
     layers.forEach(removeLayer);
     // Now safe to remove sources
     const sources = [
@@ -115,115 +137,76 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
   const loadCurrentView = useCallback(async () => {
     if (!map.current) return;
     clearAllDataLayers();
+    const getJson = (path: string) => fetch(`${API}${path}`).then((r) => r.json()).catch(() => null);
+    const [fires, hotspots, stations] = await Promise.all([
+      getJson("/api/v1/fires/active"),
+      getJson("/api/v1/fires/hotspots?days=1"),
+      getJson("/api/v1/weather/fwi"),
+    ]);
+    if (!map.current) return;
+    onCurrentData({
+      fires: fires?.features ?? [],
+      hotspots: hotspots?.features ?? [],
+      stations: stations?.features?.length ?? 0,
+      updated: new Date(),
+    });
 
-    // 1. Active BC fires
-    try {
-      const res = await fetch(`${API}/api/v1/fires/active`);
-      const data = await res.json();
-      if (data.features?.length > 0) {
-        map.current.addSource("active-fires", { type: "geojson", data });
-        map.current.addLayer({
-          id: "active-fires-glow",
-          type: "circle",
-          source: "active-fires",
-          paint: {
-            "circle-radius": ["interpolate", ["linear"], ["get", "size_ha"], 0, 8, 1000, 16, 10000, 28],
-            "circle-color": "#f97316",
-            "circle-opacity": 0.25,
-            "circle-blur": 1,
-          },
-        });
-        map.current.addLayer({
-          id: "active-fires",
-          type: "circle",
-          source: "active-fires",
-          paint: {
-            "circle-radius": ["interpolate", ["linear"], ["get", "size_ha"], 0, 5, 1000, 10, 10000, 18],
-            "circle-color": "#f97316",
-            "circle-opacity": 0.9,
-            "circle-stroke-color": "#fff",
-            "circle-stroke-width": 1,
-          },
-        });
+    // Satellite hotspots go underneath the fires: small pale dots
+    if (hotspots?.features?.length) {
+      map.current.addSource("hotspots", { type: "geojson", data: hotspots });
+      map.current.addLayer({
+        id: "hotspots",
+        type: "circle",
+        source: "hotspots",
+        paint: { "circle-radius": 2.5, "circle-color": "#fde68a", "circle-opacity": 0.8 },
+      });
+    } else if (hotspots) {
+      // No FIRMS key: public WMS tiles instead of points
+      map.current.addSource("firms-wms", { type: "raster", tiles: [FIRMS_WMS_TILES], tileSize: 256 });
+      map.current.addLayer({ id: "firms-wms", type: "raster", source: "firms-wms", paint: { "raster-opacity": 0.8 } });
+    }
 
-        map.current.on("click", "active-fires", (e) => {
-          const f = e.features?.[0];
-          if (!f || !f.geometry || f.geometry.type !== "Point") return;
-          const props = f.properties as Record<string, unknown>;
-          onFireSelect({
-            fire_id: String(props.fire_number || "unknown"),
-            fire_name: String(props.fire_name || props.fire_number || ""),
-            lat: (f.geometry as GeoJSON.Point).coordinates[1],
-            lon: (f.geometry as GeoJSON.Point).coordinates[0],
-            size_ha: Number(props.size_ha) || 0,
-            source: "active",
-            properties: props,
-          });
-        });
-        map.current.on("mouseenter", "active-fires", () => {
-          if (map.current) map.current.getCanvas().style.cursor = "pointer";
-        });
-        map.current.on("mouseleave", "active-fires", () => {
-          if (map.current) map.current.getCanvas().style.cursor = "";
-        });
-      }
-    } catch {}
+    // Weather stations: squares would need a sprite, so hollow rings coloured by FWI class
+    if (stations?.features?.length) {
+      map.current.addSource("fwi-stations", { type: "geojson", data: stations });
+      map.current.addLayer({
+        id: "fwi-stations",
+        type: "circle",
+        source: "fwi-stations",
+        paint: {
+          "circle-radius": 5,
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": [
+            "step", ["get", "FWI"],
+            "#22c55e", 5, "#eab308", 12, "#f97316", 20, "#ef4444", 30, "#7c3aed",
+          ],
+        },
+      });
+    }
 
-    // 2. FIRMS hotspots (point data if MAP_KEY available, else WMS tiles)
-    try {
-      const res = await fetch(`${API}/api/v1/fires/hotspots?days=1`);
-      const data = await res.json();
-      if (data.features?.length > 0) {
-        map.current.addSource("hotspots", { type: "geojson", data });
-        map.current.addLayer({
-          id: "hotspots",
-          type: "circle",
-          source: "hotspots",
-          paint: {
-            "circle-radius": 4,
-            "circle-color": ["interpolate", ["linear"], ["get", "frp"], 0, "#fbbf24", 50, "#f97316", 200, "#dc2626"],
-            "circle-opacity": 0.85,
-          },
-        });
-      } else {
-        // WMS fallback
-        map.current.addSource("firms-wms", {
-          type: "raster",
-          tiles: [FIRMS_WMS_TILES],
-          tileSize: 256,
-        });
-        map.current.addLayer({ id: "firms-wms", type: "raster", source: "firms-wms", paint: { "raster-opacity": 0.8 } });
-      }
-    } catch {}
-
-    // 3. FWI stations
-    try {
-      const res = await fetch(`${API}/api/v1/weather/fwi`);
-      const data = await res.json();
-      if (data.features?.length > 0) {
-        map.current.addSource("fwi-stations", { type: "geojson", data });
-        map.current.addLayer({
-          id: "fwi-stations",
-          type: "circle",
-          source: "fwi-stations",
-          paint: {
-            "circle-radius": 6,
-            "circle-color": [
-              "step", ["get", "FWI"],
-              "#22c55e", 5,
-              "#eab308", 12,
-              "#f97316", 20,
-              "#ef4444", 30,
-              "#7c3aed",
-            ],
-            "circle-opacity": 0.7,
-            "circle-stroke-color": "#fff",
-            "circle-stroke-width": 0.5,
-          },
-        });
-      }
-    } catch {}
-  }, [clearAllDataLayers, onFireSelect]);
+    if (fires?.features?.length) {
+      map.current.addSource("active-fires", { type: "geojson", data: fires });
+      map.current.addLayer({
+        id: "active-fires",
+        type: "circle",
+        source: "active-fires",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["get", "size_ha"], 0, 5, 1000, 9, 10000, 15, 100000, 24],
+          "circle-color": STATUS_COLOR,
+          "circle-opacity": 0.85,
+          "circle-stroke-color": "#111827",
+          "circle-stroke-width": 1.5,
+        },
+      });
+      on("click", "active-fires", (e) => {
+        const f = e.features?.[0];
+        if (f) onFireSelect(activeFire(f));
+      });
+      on("mouseenter", "active-fires", () => { if (map.current) map.current.getCanvas().style.cursor = "pointer"; });
+      on("mouseleave", "active-fires", () => { if (map.current) map.current.getCanvas().style.cursor = ""; });
+    }
+  }, [clearAllDataLayers, on, onFireSelect, onCurrentData]);
 
   // ── View: History ──────────────────────────────────────────────────────────
   const loadHistoryView = useCallback(async (year: number) => {
@@ -255,7 +238,7 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
         paint: { "line-color": "#f97316", "line-width": 0.5, "line-opacity": 0.8 },
       });
 
-      map.current.on("click", "history-fill", (e) => {
+      on("click", "history-fill", (e) => {
         const f = e.features?.[0];
         if (!f) return;
         const props = f.properties as Record<string, unknown>;
@@ -271,7 +254,7 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
         });
       });
     } catch {}
-  }, [clearAllDataLayers, onFireSelect]);
+  }, [clearAllDataLayers, on, onFireSelect]);
 
   // ── View: Predictions ─────────────────────────────────────────────────────
   const loadPredictionsView = useCallback(async () => {
@@ -290,39 +273,26 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
         type: "circle",
         source: "active-fires",
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["get", "size_ha"], 0, 6, 10000, 14],
-          "circle-color": "#f97316",
-          "circle-opacity": 0.9,
-          "circle-stroke-color": "#fff",
+          "circle-radius": ["interpolate", ["linear"], ["get", "size_ha"], 0, 5, 1000, 9, 10000, 15, 100000, 24],
+          "circle-color": STATUS_COLOR,
+          "circle-opacity": 0.85,
+          "circle-stroke-color": "#111827",
           "circle-stroke-width": 1.5,
         },
       });
 
-      map.current.on("click", "active-fires", async (e) => {
+      on("click", "active-fires", async (e) => {
         const f = e.features?.[0];
-        if (!f || !f.geometry || f.geometry.type !== "Point") return;
-        const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
-        const props = f.properties as Record<string, unknown>;
+        if (!f) return;
+        const fire = activeFire(f);
+        const { lat, lon } = fire;
+        onFireSelect(fire);
 
+        // No spread estimate without real weather
         let stn: Record<string, number> | null = null;
         try {
           stn = await (await fetch(`${API}/api/v1/weather/nearest?lat=${lat}&lon=${lon}`)).json();
         } catch {}
-
-        onFireSelect({
-          fire_id: String(props.fire_number || ""),
-          fire_name: String(props.fire_name || ""),
-          lat, lon,
-          size_ha: Number(props.size_ha) || 0,
-          fwi: stn?.FWI,
-          isi: stn?.ISI,
-          wind_speed_ms: stn ? stn.wind_speed / 3.6 : undefined,   // CWFIS reports km/h
-          wind_dir_deg: stn?.wind_dir,
-          source: "active",
-          properties: props,
-        });
-
-        // No spread estimate without real weather
         if (!stn) return;
         try {
           const sres = await fetch(
@@ -333,7 +303,7 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
         } catch {}
       });
     } catch {}
-  }, [clearAllDataLayers, onFireSelect]);
+  }, [clearAllDataLayers, on, onFireSelect]);
 
   function addSpreadLayers(spread: GeoJSON.FeatureCollection) {
     if (!map.current) return;
@@ -424,16 +394,16 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
               "circle-blur": 0.3,
             },
           });
-          map.current.on("click", "ignition-lightning", (e) => {
+          on("click", "ignition-lightning", (e) => {
             const f = e.features?.[0];
             if (!f?.geometry || f.geometry.type !== "Point") return;
             const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
             onRiskPointClick({ lat, lon });
           });
-          map.current.on("mouseenter", "ignition-lightning", () => {
+          on("mouseenter", "ignition-lightning", () => {
             if (map.current) map.current.getCanvas().style.cursor = "crosshair";
           });
-          map.current.on("mouseleave", "ignition-lightning", () => {
+          on("mouseleave", "ignition-lightning", () => {
             if (map.current) map.current.getCanvas().style.cursor = "";
           });
         }
@@ -455,22 +425,22 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
               "circle-blur": 0.3,
             },
           });
-          map.current.on("click", "ignition-human", (e) => {
+          on("click", "ignition-human", (e) => {
             const f = e.features?.[0];
             if (!f?.geometry || f.geometry.type !== "Point") return;
             const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
             onRiskPointClick({ lat, lon });
           });
-          map.current.on("mouseenter", "ignition-human", () => {
+          on("mouseenter", "ignition-human", () => {
             if (map.current) map.current.getCanvas().style.cursor = "crosshair";
           });
-          map.current.on("mouseleave", "ignition-human", () => {
+          on("mouseleave", "ignition-human", () => {
             if (map.current) map.current.getCanvas().style.cursor = "";
           });
         }
       } catch {}
     }
-  }, [clearAllDataLayers, onRiskPointClick]);
+  }, [clearAllDataLayers, on, onRiskPointClick]);
 
   // ── React to view changes ──────────────────────────────────────────────────
   useEffect(() => {
@@ -509,6 +479,9 @@ export default function WildfireMap({ view, historyYear, riskMonth, riskLayers, 
   }, [selectedFire]);
 
   return (
-    <div ref={mapContainer} className="w-full h-full" />
+    <div className="relative w-full h-full">
+      <div ref={mapContainer} className="w-full h-full" />
+      {(view === "current" || view === "predictions") && <MapLegend showSpread={view === "predictions"} />}
+    </div>
   );
 }

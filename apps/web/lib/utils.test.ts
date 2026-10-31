@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fwiColor, fwiLabel } from "./utils";
+import { fwiColor, fwiLabel, kmBetween, statusColor } from "./utils";
 
 describe("mounted FWI scale", () => {
   it("uses different moderate/high cutovers than lib/format.ts", () => {
@@ -12,5 +12,20 @@ describe("mounted FWI scale", () => {
     expect(fwiColor(4)).toBe("text-green-400");
     expect(fwiColor(12)).toBe("text-orange-400");
     expect(fwiColor(30)).toBe("text-purple-400");
+  });
+});
+
+describe("statusColor", () => {
+  it("maps BCWS stages of control and greys out anything else", () => {
+    expect(statusColor("Out of Control")).toBe("#ef4444");
+    expect(statusColor("Under Control")).toBe("#22c55e");
+    expect(statusColor("Unknown")).toBe("#9ca3af");
+  });
+});
+
+describe("kmBetween", () => {
+  it("measures about 111 km per degree of latitude", () => {
+    expect(kmBetween(50, -120, 51, -120)).toBeCloseTo(111.2, 0);
+    expect(kmBetween(50, -120, 50, -120)).toBe(0);
   });
 });

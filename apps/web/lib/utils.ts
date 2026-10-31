@@ -20,3 +20,21 @@ export function fwiColor(fwi: number): string {
   if (fwi < 30) return "text-red-400";
   return "text-purple-400";
 }
+
+/** BC Wildfire Service stages of control, most urgent first, with map colours. */
+export const FIRE_STATUSES = [
+  { status: "Out of Control", color: "#ef4444" },
+  { status: "Being Held",     color: "#f59e0b" },
+  { status: "Under Control",  color: "#22c55e" },
+] as const;
+
+export function statusColor(status: string): string {
+  return FIRE_STATUSES.find((s) => s.status === status)?.color ?? "#9ca3af";
+}
+
+/** Great-circle distance in km (equirectangular; fine at the scale of one fire). */
+export function kmBetween(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const rad = Math.PI / 180;
+  const x = (lon2 - lon1) * rad * Math.cos(((lat1 + lat2) / 2) * rad);
+  return 6371 * Math.hypot(x, (lat2 - lat1) * rad);
+}

@@ -139,7 +139,11 @@ def test_active_fires_keep_valid_points_when_one_feature_is_bad(client, monkeypa
             {"type": "Feature", "properties": {"FIRE_NUMBER": "N1"}, "geometry": None},
             {
                 "type": "Feature",
-                "properties": {"FIRE_NUMBER": "N2", "FIRE_NAME": "Test", "CURRENT_SIZE": "12.5"},
+                "properties": {
+                    "FIRE_NUMBER": "N2", "FIRE_NAME": "Test", "CURRENT_SIZE": "12.5",
+                    "IGNITION_DATE": 1784243916000, "GEOGRAPHIC_DESCRIPTION": "6.4 km S of Kluskoil Lake",
+                    "FIRE_OF_NOTE_IND": "Y",
+                },
                 "geometry": {"type": "Point", "coordinates": [-123.1, 49.2]},
             },
             {"type": "Feature", "properties": [], "geometry": {"type": "Polygon", "coordinates": []}},
@@ -157,6 +161,9 @@ def test_active_fires_keep_valid_points_when_one_feature_is_bad(client, monkeypa
     assert features[0]["properties"]["fire_number"] == "N2"
     assert features[0]["properties"]["size_ha"] == 12.5
     assert features[0]["properties"]["lat"] == 49.2
+    assert features[0]["properties"]["ignition_date"] == "2026-07-16"
+    assert features[0]["properties"]["location"] == "6.4 km S of Kluskoil Lake"
+    assert features[0]["properties"]["fire_of_note"] is True
 
 
 def test_active_fires_upstream_failure_is_empty(client, monkeypatch):
@@ -364,3 +371,9 @@ def test_cors_allows_only_configured_origins(client):
     blocked = client.get("/health", headers={"Origin": "https://evil.example"})
     assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
     assert "access-control-allow-origin" not in blocked.headers
+
+
+def test_situation_availability_follows_the_key(client, monkeypatch):
+    assert client.get("/api/v1/situation/available").json() == {"available": False}
+    monkeypatch.setenv("XAI_API_KEY", "k")
+    assert client.get("/api/v1/situation/available").json() == {"available": True}

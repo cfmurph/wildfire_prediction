@@ -6,6 +6,8 @@ import ViewSwitcher, { View } from "@/components/ViewSwitcher";
 import FirePanel from "@/components/FirePanel";
 import RiskPanel from "@/components/RiskPanel";
 import Header from "@/components/Header";
+import CurrentSummary from "@/components/CurrentSummary";
+import type { CurrentData } from "@/lib/fires";
 
 // MapLibre needs to be client-side only (no SSR)
 const WildfireMap = dynamic(() => import("@/components/WildfireMap"), {
@@ -36,6 +38,7 @@ export default function Home() {
   const [historyYear, setHistoryYear] = useState(2023);
   const [riskMonth, setRiskMonth] = useState(new Date().getMonth() + 1);
   const [selectedFire, setSelectedFire] = useState<SelectedFire | null>(null);
+  const [currentData, setCurrentData] = useState<CurrentData | null>(null);
   const [riskLayers, setRiskLayers] = useState({ lightning: true, human: true });
   const [riskClickedPoint, setRiskClickedPoint] = useState<{ lat: number; lon: number } | null>(null);
 
@@ -60,8 +63,10 @@ export default function Home() {
                 onLayerToggle={setRiskLayers}
                 clickedPoint={riskClickedPoint}
               />
+            ) : !selectedFire && (view === "current" || view === "predictions") ? (
+              <CurrentSummary data={currentData} onSelect={setSelectedFire} />
             ) : (
-              <FirePanel fire={selectedFire} view={view} />
+              <FirePanel fire={selectedFire} view={view} hotspots={currentData?.hotspots ?? []} onBack={() => setSelectedFire(null)} />
             )}
           </div>
         </aside>
@@ -70,6 +75,7 @@ export default function Home() {
         <main className="flex-1 relative">
           <WildfireMap
             view={view}
+            onCurrentData={setCurrentData}
             historyYear={historyYear}
             riskMonth={riskMonth}
             riskLayers={riskLayers}
