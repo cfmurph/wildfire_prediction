@@ -10,6 +10,7 @@ experiments
 notebooks
 apps/web/node_modules
 apps/web/.next
+apps/web/out
 **/.env
 **/.env.local
 **/.env.*.local

@@ -16,10 +16,14 @@ export default function Header() {
   return (
     <header className="h-12 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-3 shrink-0">
       <Flame className="text-orange-500 w-5 h-5" />
-      <span className="font-semibold text-sm tracking-wide whitespace-nowrap">BC Wildfire Prediction</span>
+      <span className="font-semibold text-sm tracking-wide whitespace-nowrap">BC Wildfire Map</span>
       <span className="text-xs text-gray-500 ml-1 truncate">
-        <span className="hidden sm:inline">— Research prototype, not an official forecast</span>
-        <span className="sm:hidden">Prototype</span>
+        <span className="hidden md:inline">— Prototype, not an official source. </span>
+        <a href="https://www2.gov.bc.ca/gov/content/safety/wildfire-status" target="_blank" rel="noopener noreferrer"
+           className="text-orange-400 hover:text-orange-300">
+          <span className="hidden md:inline">Official fire and evacuation info: BC Wildfire Service</span>
+          <span className="md:hidden">Official info</span>
+        </a>
       </span>
       <div className="ml-auto flex items-center gap-2 text-xs text-gray-500 whitespace-nowrap">
         <span className={cn("w-2 h-2 rounded-full inline-block", apiUp === null ? "bg-gray-500" : apiUp ? "bg-green-500" : "bg-red-500")} />

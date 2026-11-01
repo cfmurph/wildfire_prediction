@@ -2,7 +2,7 @@
 NASA FIRMS VIIRS NRT hotspot service.
 
 With MAP_KEY: returns point GeoJSON with fire attributes (FRP, brightness, confidence).
-Without MAP_KEY: returns empty FeatureCollection — WMS tile fallback is used on frontend.
+Without MAP_KEY: returns an empty FeatureCollection, so the map shows no hotspots.
 
 BC bounding box: lon -139 to -114, lat 48 to 60
 """
@@ -16,6 +16,8 @@ import logging
 
 import httpx
 import pandas as pd
+
+from api.services.cache import ttl_cache
 
 log = logging.getLogger(__name__)
 
@@ -37,16 +39,8 @@ FIRMS_ARCHIVE_SOURCES = [
     "VIIRS_NOAA21_NRT_2", # NOAA-21 archive (2022+)
 ]
 
-# WMS tile fallback (no auth needed) — update to NOAA-20 layer
-FIRMS_WMS = (
-    "https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/"
-    "?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1"
-    "&LAYERS=fires_viirs_noaa20&STYLES=&FORMAT=image/png"
-    "&TRANSPARENT=true&BGCOLOR=0x000000&CRS=EPSG:4326"
-    "&WIDTH=256&HEIGHT=256"
-)
 
-
+@ttl_cache(300)
 async def get_hotspots_geojson(days: int = 1) -> dict:
     """
     Fetch VIIRS NRT hotspots for BC as GeoJSON FeatureCollection.

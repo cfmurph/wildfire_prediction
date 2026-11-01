@@ -91,7 +91,7 @@ The package build backend is `setuptools.build_meta`. `pip install -e .` install
 
 ## Web app
 
-A MapLibre map of British Columbia with three views:
+**BC Wildfire Map**: a MapLibre map of British Columbia with three views:
 
 - **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet).
 - **History**: BC fire perimeters by year, 2006 to the current season.
@@ -125,21 +125,28 @@ pytest tests/                                         # research
 cd apps/web && npm test && npm run test:e2e           # web unit + Playwright
 ```
 
-CI (`.github/workflows/test.yml`) runs the API and web suites on every PR to `main`. For research code it runs only `tests/test_metrics.py`; `tests/test_dataset.py` needs PyTorch, which CI does not install, so run it locally.
+CI (`.github/workflows/test.yml`) runs the API, research (CPU PyTorch) and web suites on every PR to `main`.
 
 ### Deploy
 
-**API on Railway.** `railway.toml` builds `api/Dockerfile` with the repository root as context, so the image includes `src/` and the fire-start densities. Do not set the service root to `api/`. Health check: `GET /health`.
+One Railway service runs everything. `railway.toml` builds `api/Dockerfile` with the repository root as context: a Node stage builds the web app as static files (`output: "export"`), and the Python stage serves them from `/` next to the API under `/api/v1`, so there is one origin and no CORS. Do not set the service root to `api/`. Health check: `GET /health`.
 
-**Web on Vercel.** Root directory `apps/web`, framework Next.js. `apps/web/vercel.json` skips the build when a commit does not touch `apps/web`.
+Upstream feeds (BC Wildfire Service, FIRMS, CWFIS) are cached for 5 minutes per process, past seasons for a day, so visitor traffic does not reach them. Responses are gzip-compressed.
+
+To check the image locally:
+
+```bash
+docker build -f api/Dockerfile -t bc-wildfire-map .
+docker run --rm -p 8000:8000 -e FIRMS_MAP_KEY=... bc-wildfire-map   # http://localhost:8000
+```
 
 ### Environment variables
 
 | Variable | Service | Required | Purpose |
 |---|---|---|---|
-| `FIRMS_MAP_KEY` | API | for hotspots | NASA FIRMS map key |
-| `CORS_ORIGINS` | API | in production | Comma-separated browser origins (the Vercel URL). Defaults to `http://localhost:3000` |
-| `NEXT_PUBLIC_API_URL` | Web | in production | Railway API URL, no trailing slash |
+| `FIRMS_MAP_KEY` | API | for hotspots | NASA FIRMS map key; without it the map shows no hotspots |
+| `CORS_ORIGINS` | API | local dev only | Browser origins allowed to call the API from `next dev`. Defaults to `http://localhost:3000` |
+| `NEXT_PUBLIC_API_URL` | Web | local dev only | API for `next dev`; defaults to `http://localhost:8000`. Production builds call their own origin |
 
 ---
 
@@ -149,11 +156,11 @@ CI (`.github/workflows/test.yml`) runs the API and web suites on every PR to `ma
 wildfire_prediction/
 ├── data/
 │   ├── raw/            # Downloaded source files (gitignored)
-│   ├── processed/      # Assembled .npz patches + split manifests (gitignored, except two stats files the API reads)
+│   ├── processed/      # Assembled .npz patches + split manifests (gitignored, except stats/fire_starts.json, which the API serves)
 │   └── external/       # Alberta/Saskatchewan (Phase 2)
 ├── notebooks/          # EDA + experiment notebooks
-├── api/                # FastAPI service (Railway): fires, weather, spread, fire starts
-├── apps/web/           # Next.js map (Vercel)
+├── api/                # FastAPI service (Railway): fires, weather, spread, fire starts; serves the web app
+├── apps/web/           # Next.js map, exported as static files
 ├── src/
 │   ├── data/           # Patch assembly + PyTorch Dataset + augmentation
 │   ├── models/         # RF, U-Net, ConvLSTM

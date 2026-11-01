@@ -16,6 +16,8 @@ from typing import Optional
 
 import httpx
 
+from api.services.cache import ttl_cache
+
 log = logging.getLogger(__name__)
 
 # Latest daily report per station, Canada-wide; filtered to BC below
@@ -26,6 +28,7 @@ CWFIS_STATIONS_URL = (
 )
 
 
+@ttl_cache(300)
 async def get_current_fwi() -> dict:
     """
     Fetch current CWFIS FWI station readings as GeoJSON.
