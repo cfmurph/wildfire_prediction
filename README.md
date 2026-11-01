@@ -29,7 +29,7 @@ Coverage: **BC fire seasons 2012–2023**.
 
 Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. NDVI comes from MODIS 16-day composites: run `scripts/prepare_ndvi.py` after downloading (it needs `pip install -e ".[data]"` for HDF4). Each patch uses the latest composite that ended by its date, so the input cannot show the next day's burn. The BurnP3 burn probability channel is zero-filled until BurnP3+ runs are available.
 
-**Targets are synthetic.** Perimeters give only a fire's final extent, so `generate_daily_masks` grows each fire from a seed toward its final perimeter, with daily spread scaled by FWI, ISI and wind. Scores therefore measure how well a model learns that generator, not real fire behaviour. Real VIIRS progression targets are the next step.
+**Targets come from satellite detections.** Perimeters give only a fire's final extent, so `firms_daily_masks` marks a pixel burned from the first day a NASA FIRMS VIIRS detection (Suomi NPP and NOAA-20, 375 m) falls in it. Only detections inside the fire's own final perimeter count, which drops other fires and non-wildfire burning such as slash piles. Cloud and smoke can hide burning, so some burned pixels are never detected.
 
 ---
 

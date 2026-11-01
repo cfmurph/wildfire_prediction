@@ -4,7 +4,7 @@ Canadian Wildfire Dataset Assembly Pipeline
 Assembles spatially co-registered 64×64 patches from multiple open data sources:
 
   BC fire perimeters (SHP/GeoJSON)
-  CWFIS active hotspots (CSV)
+  NASA FIRMS VIIRS active-fire detections (CSV)
   ERA5 weather reanalysis (NetCDF)
   CWFIS Fire Weather Index rasters (GeoTIFF)
   CDEM terrain (GeoTIFF) → slope/aspect derived
@@ -46,97 +46,29 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Synthetic daily fire progression
+# Daily fire progression from satellite detections
 # ---------------------------------------------------------------------------
 
-def generate_daily_masks(
-    final_mask: np.ndarray,          # (H, W) — rasterised final perimeter
-    n_days: int,                      # total burn duration in days
-    fwi_series: list[float],          # FWI per day (length n_days)
-    isi_series: list[float],          # ISI per day
-    wind_dir_series: list[float],     # wind direction per day (degrees FROM)
-    wind_speed_series: list[float],   # wind speed per day (m/s)
+def firms_daily_masks(
+    detections: pd.DataFrame,          # x, y in the patch CRS; date (Timestamp)
+    dates: list[pd.Timestamp],
+    transform: rasterio.transform.Affine,
+    perimeter: np.ndarray,             # (H, W) — rasterised final perimeter
 ) -> list[np.ndarray]:
     """
-    Generate synthetic daily binary burn masks by progressively dilating
-    a seed mask toward the final documented fire perimeter.
-
-    Physics:
-    - Day 0: 3×3 pixel seed at centroid of final perimeter
-    - Each day: anisotropic morphological dilation scaled by FWI + ISI + wind
-    - Expansion direction biased toward wind direction
-    - Hard ceiling: pixels outside the final perimeter cannot burn
-    - Calibrated so the final mask area is reached by day n_days
-
-    Returns list of (H, W) float32 arrays, one per day (day 0 … day n_days).
+    Cumulative burn mask per day: a pixel has burned from the first day a detection
+    falls in it. Only pixels inside the fire's own final perimeter count, which drops
+    other fires and burning that is not a wildfire, such as slash piles.
     """
-    try:
-        from scipy.ndimage import binary_dilation, label
-        import numpy as np
-    except ImportError:
-        raise ImportError("scipy required: pip install scipy")
-
-    H, W = final_mask.shape
-    n_final_px = final_mask.sum()
-    if n_final_px == 0:
-        return [np.zeros((H, W), dtype=np.float32)] * (n_days + 1)
-
-    # Seed: 3×3 block at centroid of final perimeter
-    ys, xs = np.where(final_mask > 0)
-    cy, cx = int(ys.mean()), int(xs.mean())
-    seed = np.zeros((H, W), dtype=bool)
-    seed[max(0, cy-1):min(H, cy+2), max(0, cx-1):min(W, cx+2)] = True
-    seed &= final_mask.astype(bool)
-    if not seed.any():
-        seed[cy, cx] = True
-
-    masks: list[np.ndarray] = [seed.astype(np.float32)]
-    current = seed.copy()
-
-    for day in range(n_days):
-        fwi  = float(fwi_series[day])  if day < len(fwi_series)  else 15.0
-        isi  = float(isi_series[day])  if day < len(isi_series)  else 6.0
-        wdir = float(wind_dir_series[day]) if day < len(wind_dir_series) else 270.0
-        wspd = float(wind_speed_series[day]) if day < len(wind_speed_series) else 4.0
-
-        # Expansion radius (pixels/day at 1 km resolution)
-        fwi_factor  = np.log1p(max(fwi, 1))  / np.log1p(20)   # norm to FWI=20
-        wind_factor = np.log1p(max(wspd, 0))  / np.log1p(8)    # norm to 8 m/s
-        isi_factor  = np.log1p(max(isi, 1))   / np.log1p(10)   # norm to ISI=10
-        r_along = max(0.4, 2.0 * fwi_factor * (1.0 + 0.7 * isi_factor) * (1.0 + 0.4 * wind_factor))
-        r_cross = r_along * 0.4   # cross-wind spread is narrower
-
-        # Build wind-biased elliptical structuring element
-        se_size = max(3, int(np.ceil(r_along * 2)) * 2 + 1)
-        center  = se_size // 2
-        spread_dir = np.radians((wdir + 180) % 360)  # fire spreads INTO wind
-        cos_d, sin_d = np.cos(spread_dir), np.sin(spread_dir)
-
-        se = np.zeros((se_size, se_size), dtype=bool)
-        for i in range(se_size):
-            for j in range(se_size):
-                dy, dx = i - center, j - center
-                # Rotate to spread direction frame; rows run south, so north = -dy
-                d_along =  dx * sin_d - dy * cos_d
-                d_cross =  dx * cos_d + dy * sin_d
-                if (d_along / r_along) ** 2 + (d_cross / r_cross) ** 2 <= 1.0:
-                    se[i, j] = True
-        if not se.any():
-            se[center, center] = True
-
-        expanded = binary_dilation(current, structure=se)
-        # Hard ceiling: cannot burn outside final perimeter
-        expanded &= final_mask.astype(bool)
-        # If fully saturated already, stay at final mask
-        if not expanded.any():
-            expanded = current.copy()
-
-        current = expanded
-        masks.append(current.astype(np.float32))
-
-    # Ensure last mask equals final perimeter
-    masks[-1] = final_mask.astype(np.float32)
-    return masks
+    rows, cols = rasterio.transform.rowcol(transform, detections["x"], detections["y"])
+    rows, cols = np.asarray(rows), np.asarray(cols)
+    day = (detections["date"] - dates[0]).dt.days.to_numpy()
+    H, W = perimeter.shape
+    keep = (rows >= 0) & (rows < H) & (cols >= 0) & (cols < W) & (day >= 0) & (day < len(dates))
+    first = np.full((H, W), len(dates))
+    np.minimum.at(first, (rows[keep], cols[keep]), day[keep])
+    first[perimeter == 0] = len(dates)
+    return [(first <= i).astype(np.float32) for i in range(len(dates))]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -369,6 +301,7 @@ class PatchExtractor:
         self.fwi_dir = self.raw_dir / "fwi"
         self.cdem_path = self.raw_dir / "cdem" / "cdem_bc_srtm90.tif"
         self.ndvi_dir = self.raw_dir / "modis_ndvi"
+        self.firms_dir = self.raw_dir / "firms"
         self.landcover_path = self.raw_dir / "landcover" / "landcover-2020-classification.tif"
 
     # ------------------------------------------------------------------
@@ -385,6 +318,7 @@ class PatchExtractor:
 
         perimeters = self._load_perimeters()
         self.fire_history = self._load_fire_history(perimeters)
+        self.detections = self._load_detections()
 
         for year in years:
             log.info(f"Assembling patches for {self.province} {year}")
@@ -410,7 +344,7 @@ class PatchExtractor:
           FIRE_ID   ← FIRE_NUMBER
           FIRE_YEAR ← FIRE_YEAR
           IGN_DATE  ← FIRE_DATE (ignition / start date)
-          OUT_DATE  ← inferred (FIRE_DATE + 90 days, capped at Oct 31)
+          OUT_DATE  ← Oct 31 of the fire year (end of season)
           SIZE_HA   ← FIRE_SIZE_HECTARES
         """
         # Prefer the filtered 2012-2023 CNFDB file if available
@@ -488,17 +422,9 @@ class PatchExtractor:
         # Parse dates
         gdf["IGN_DATE"] = pd.to_datetime(gdf.get("IGN_DATE"), errors="coerce")
 
-        # Infer OUT_DATE: ignition + min(90 days, season end Oct 31)
-        def _infer_out_date(row):
-            ign = row["IGN_DATE"]
-            if pd.isna(ign):
-                return pd.NaT
-            year = ign.year
-            season_end = pd.Timestamp(f"{year}-10-31")
-            estimated = ign + pd.Timedelta(days=90)
-            return min(estimated, season_end)
-
-        gdf["OUT_DATE"] = gdf.apply(_infer_out_date, axis=1)
+        # OUT_DATE: season end. Days a fire did not grow in the VIIRS record are skipped later
+        season_end = gdf["IGN_DATE"].dt.year.astype("Int64").astype(str) + "-10-31"
+        gdf["OUT_DATE"] = pd.to_datetime(season_end, errors="coerce")
 
         # Infer FIRE_YEAR from IGN_DATE if not set
         mask_no_year = gdf["FIRE_YEAR"].isna()
@@ -523,6 +449,22 @@ class PatchExtractor:
         history = pd.concat(parts, ignore_index=True)
         log.info(f"  Fire history: {len(history):,} perimeters from {history['FIRE_YEAR'].min()}")
         return history[history.geometry.notna()].sort_values("FIRE_YEAR")
+
+    def _load_detections(self) -> pd.DataFrame:
+        """VIIRS 375 m vegetation-fire detections (both satellites) as patch-CRS points."""
+        files = sorted(self.firms_dir.glob("viirs-*_bc.csv"))
+        if not files:
+            raise FileNotFoundError(
+                f"No VIIRS files in {self.firms_dir}. Run scripts/download_canada.py first."
+            )
+        cols = ["latitude", "longitude", "acq_date", "confidence", "type"]
+        df = pd.concat([pd.read_csv(f, usecols=cols) for f in files], ignore_index=True)
+        df = df[(df["confidence"] != "l") & (df["type"] == 0)]
+        # acq_date is UTC; BC's afternoon and night overpasses both fall on the local date
+        lon, lat = df["longitude"].to_numpy(), df["latitude"].to_numpy()
+        x, y = rasterio.warp.transform("EPSG:4326", OUTPUT_CRS, lon, lat)
+        log.info(f"  VIIRS detections: {len(df):,} from {len(files)} files")
+        return pd.DataFrame({"x": x, "y": y, "date": pd.to_datetime(df["acq_date"]).to_numpy()})
 
     def _years_since_fire(
         self, year: int, transform: rasterio.transform.Affine, shape: tuple[int, int]
@@ -567,7 +509,6 @@ class PatchExtractor:
         fire_geom: gpd.GeoDataFrame,
         fire_id: str,
         year: int,
-        use_synthetic_progression: bool = True,
     ) -> Iterator[PatchMeta]:
         """
         Yield patches for each day the fire was active.
@@ -605,7 +546,7 @@ class PatchExtractor:
         transformer = pyproj.Transformer.from_crs(OUTPUT_CRS.to_epsg(), 4326, always_xy=True)
         lon, lat = transformer.transform(cx, cy)
 
-        # Rasterise the full documented fire perimeter (ceiling for synthetic spread)
+        # Rasterise the fire's final perimeter: only detections inside it count
         full_fire_mask = rasterio.features.rasterize(
             [(geom, 1.0) for geom in fire_albers.geometry if geom is not None],
             out_shape=shape, transform=transform, dtype=np.float32, fill=0.0,
@@ -613,37 +554,7 @@ class PatchExtractor:
         if full_fire_mask.sum() == 0:
             return  # fire doesn't intersect patch area
 
-        # Build per-day FWI/wind series for physics-driven dilation
-        fwi_series, isi_series, wdir_series, wspd_series = [], [], [], []
-        for date in date_range:
-            fwi_val, isi_val, wdir_val, wspd_val = 15.0, 6.0, 270.0, 4.0
-            try:
-                # A 64 km patch spans ~2 cells of these 0.25° grids, so the centre value stands in for the patch
-                at_centre = lambda arr: float(arr.sel(latitude=lat, longitude=lon, method="nearest"))
-                fd = self._fwi_day(date.strftime("%Y-%m-%d"))
-                if fd:
-                    fwi_val, isi_val = at_centre(fd["FWI"]), at_centre(fd["ISI"])
-                ed = self._era5_day(date.strftime("%Y-%m-%d"))
-                if ed:
-                    u, v = at_centre(ed["u10"]), at_centre(ed["v10"])
-                    wspd_val = float(np.hypot(u, v))
-                    wdir_val = float(np.degrees(np.arctan2(-u, -v)) % 360)
-            except Exception:
-                pass
-            fwi_series.append(fwi_val)
-            isi_series.append(isi_val)
-            wdir_series.append(wdir_val)
-            wspd_series.append(wspd_val)
-
-        # Generate synthetic daily progression masks
-        daily_masks = generate_daily_masks(
-            final_mask=full_fire_mask,
-            n_days=n_days,
-            fwi_series=fwi_series,
-            isi_series=isi_series,
-            wind_dir_series=wdir_series,
-            wind_speed_series=wspd_series,
-        )
+        daily_masks = firms_daily_masks(self.detections, date_range, transform, full_fire_mask)
 
         # Yield one patch per consecutive day pair (T → T+1)
         for i, date in enumerate(date_range[:-1]):
@@ -652,8 +563,7 @@ class PatchExtractor:
             next_mask = daily_masks[i + 1]   # burn extent at day T+1 (target)
 
             # Skip uninformative pairs (no new burning)
-            delta_px = int((next_mask - prev_mask).clip(0).sum())
-            if delta_px == 0 and i > 0:
+            if not (next_mask > prev_mask).any():
                 continue
 
             try:
@@ -698,7 +608,7 @@ class PatchExtractor:
         """
         Build the (N_CH, H, W) input channel array for one patch-day.
 
-        PrevFireMask is provided explicitly (from synthetic daily progression).
+        PrevFireMask is provided explicitly (from the FIRMS daily progression).
         All other channels are loaded from the downloaded data sources.
         """
         H, W = shape
@@ -742,7 +652,7 @@ class PatchExtractor:
                 resampling=Resampling.mode,  # dominant 30 m class in each 1 km pixel
             )
 
-        # --- Previous fire mask (t=0) — provided by caller (synthetic progression) ---
+        # --- Previous fire mask (t=0) — provided by caller (FIRMS progression) ---
         X[ch["PrevFireMask"]] = prev_mask
 
         # --- Fire history: a recent burn has little fuel left to carry a fire ---
