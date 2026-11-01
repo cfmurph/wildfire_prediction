@@ -364,3 +364,19 @@ def test_years_since_fire_uses_the_latest_earlier_season_only():
     out = PatchExtractor._years_since_fire(extractor, 2015, transform, (4, 4))
     # The 2015 fire is this season's, so it must not count
     np.testing.assert_array_equal(out[0], [5, 15, 15, YEARS_SINCE_FIRE_CAP])
+
+
+def test_weather_grid_coordinates_are_cell_centres():
+    import xarray as xr
+    from pyproj import Transformer
+    from rasterio.transform import from_origin
+
+    from src.data.assemble import OUTPUT_CRS, PatchExtractor
+
+    # 0.25° grid whose value is its own longitude, like an ERA5 or CEMS field
+    lons, lats = np.array([-121.0, -120.75, -120.5]), np.array([50.5, 50.25, 50.0])
+    field = xr.DataArray(np.tile(lons, (3, 1)), coords={"latitude": lats, "longitude": lons})
+    x, y = Transformer.from_crs(4326, OUTPUT_CRS, always_xy=True).transform(-120.75, 50.25)
+    transform = from_origin(x - 2500, y + 2500, 1000, 1000)  # 5 × 5 km around the middle grid point
+    out = PatchExtractor._regrid_numpy(None, field.values, field, transform, (5, 5))
+    assert out[2, 2] == pytest.approx(-120.75, abs=0.01)

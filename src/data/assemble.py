@@ -584,16 +584,9 @@ class PatchExtractor:
         X = np.zeros((len(CHANNELS), H, W), dtype=np.float32)
         ch = {name: i for i, name in enumerate(CHANNELS)}
 
-        # --- Terrain (static) ---
-        if self.cdem_path.exists():
-            elev = reproject_to_patch_grid(self.cdem_path, transform, OUTPUT_CRS, shape, fill_value=np.nan)
-            # SRTM voids and land outside BC take the patch's mean elevation
-            elev = _fill_nan(np.where(elev <= -32767, np.nan, elev))
-            # Gradient as east/north components, which flips and rotations transform exactly
-            d_south, d_east = np.gradient(elev, TARGET_RESOLUTION_M)   # rows run south
-            X[ch["elevation"]] = elev
-            X[ch["slope_east"]] = d_east
-            X[ch["slope_north"]] = -d_south
+        # --- Terrain, land cover and fire history: the same every day at this location ---
+        for var_name, arr in self._static_channels(transform, shape, year).items():
+            X[ch[var_name]] = arr
 
         # --- ERA5 weather ---
         for var_name, arr in self._load_era5_patch(date_str, transform, shape).items():
@@ -611,23 +604,34 @@ class PatchExtractor:
             )
             X[ch["NDVI"]] = _fill_nan(ndvi)
 
-        # --- Land cover (static) ---
+        # --- Previous fire mask (t=0) — provided by caller (FIRMS progression) ---
+        X[ch["PrevFireMask"]] = prev_mask
+        return X
+
+    @functools.lru_cache(maxsize=16)
+    def _static_channels(
+        self, transform: rasterio.transform.Affine, shape: tuple[int, int], year: int
+    ) -> dict[str, np.ndarray]:
+        """Channels that do not change within a season. Cached: a tile yields a patch per day."""
+        out = {}
+        if self.cdem_path.exists():
+            elev = reproject_to_patch_grid(self.cdem_path, transform, OUTPUT_CRS, shape, fill_value=np.nan)
+            # SRTM voids and land outside BC take the patch's mean elevation
+            elev = _fill_nan(np.where(elev <= -32767, np.nan, elev))
+            # Gradient as east/north components, which flips and rotations transform exactly
+            d_south, d_east = np.gradient(elev, TARGET_RESOLUTION_M)   # rows run south
+            out.update(elevation=elev, slope_east=d_east, slope_north=-d_south)
         if self.landcover_path.exists():
-            X[ch["landcover"]] = reproject_to_patch_grid(
+            out["landcover"] = reproject_to_patch_grid(
                 self.landcover_path,
                 transform,
                 OUTPUT_CRS,
                 shape,
                 resampling=Resampling.mode,  # dominant 30 m class in each 1 km pixel
             )
-
-        # --- Previous fire mask (t=0) — provided by caller (FIRMS progression) ---
-        X[ch["PrevFireMask"]] = prev_mask
-
-        # --- Fire history: a recent burn has little fuel left to carry a fire ---
-        X[ch["years_since_fire"]] = self._years_since_fire(year, transform, shape)
-
-        return X
+        # A recent burn has little fuel left to carry a fire
+        out["years_since_fire"] = self._years_since_fire(year, transform, shape)
+        return out
 
     # ------------------------------------------------------------------
     # File finders
@@ -726,55 +730,33 @@ class PatchExtractor:
         transform: rasterio.transform.Affine,
         shape: tuple[int, int],
     ) -> np.ndarray:
-        """
-        Regrid a (H_src, W_src) numpy array from ERA5 lat/lon grid to
-        the target patch grid using rasterio's in-memory reprojection.
-        """
-        import tempfile
-
-        # Write to a temporary in-memory raster then reproject
+        """Regrid one field from its regular lat/lon grid to the patch grid, in memory."""
         lat_key = next((k for k in ["latitude", "lat"] if k in ds.coords), None)
         lon_key = next((k for k in ["longitude", "lon"] if k in ds.coords), None)
         if lat_key is None or lon_key is None:
             return np.full(shape, 0.0, dtype=np.float32)
         lats = ds.coords[lat_key].values
         lons = ds.coords[lon_key].values
+        lon_res = abs(float(lons[1] - lons[0])) if len(lons) > 1 else 0.25
+        lat_res = abs(float(lats[1] - lats[0])) if len(lats) > 1 else 0.25
 
-        # Build source affine (ERA5 is on a regular lat/lon grid)
-        lon_res = float(lons[1] - lons[0]) if len(lons) > 1 else 0.25
-        lat_res = float(lats[1] - lats[0]) if len(lats) > 1 else -0.25
-
+        # ERA5 and CEMS coordinates are cell centres; the transform needs the outer edge
         src_transform = rasterio.transform.from_origin(
-            west=float(lons[0]),
-            north=float(lats[0]),
-            xsize=abs(lon_res),
-            ysize=abs(lat_res),
+            float(lons[0]) - lon_res / 2, float(lats[0]) + lat_res / 2, lon_res, lat_res
         )
-        src_crs = CRS.from_epsg(4326)
-
-        with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-
-        try:
-            d = data if data.ndim == 2 else data[0]
-            h, w = d.shape
-            with rasterio.open(
-                tmp_path,
-                "w",
-                driver="GTiff",
-                height=h,
-                width=w,
-                count=1,
-                dtype=rasterio.float32,
-                crs=src_crs,
-                transform=src_transform,
-            ) as dst:
-                dst.write(d.astype(np.float32), 1)
-
-            # CEMS is NaN over ocean, and patches can extend past the download box
-            return _fill_nan(reproject_to_patch_grid(tmp_path, transform, OUTPUT_CRS, shape, fill_value=np.nan))
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        destination = np.full(shape, np.nan, dtype=np.float32)
+        rasterio.warp.reproject(
+            source=(data if data.ndim == 2 else data[0]).astype(np.float32),
+            destination=destination,
+            src_transform=src_transform,
+            src_crs=CRS.from_epsg(4326),
+            dst_transform=transform,
+            dst_crs=OUTPUT_CRS,
+            resampling=Resampling.bilinear,
+            dst_nodata=np.nan,
+        )
+        # CEMS is NaN over ocean, and patches can extend past the download box
+        return _fill_nan(destination)
 
 
 # ---------------------------------------------------------------------------
