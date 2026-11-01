@@ -157,6 +157,9 @@ CEMS_FWI_VARS = {
     "ISI": "infsinx", "BUI": "fbupinx", "FWI": "fwinx",
 }
 
+# NFDB perimeters start in 1972, 40 years before the first patch season (2012)
+YEARS_SINCE_FIRE_CAP = 40
+
 # Buffer around fire perimeter edge for patch sampling (metres)
 PATCH_BUFFER_M = 5_000   # 5 km beyond active perimeter
 
@@ -381,6 +384,7 @@ class PatchExtractor:
         all_meta: list[PatchMeta] = []
 
         perimeters = self._load_perimeters()
+        self.fire_history = self._load_fire_history(perimeters)
 
         for year in years:
             log.info(f"Assembling patches for {self.province} {year}")
@@ -506,6 +510,34 @@ class PatchExtractor:
 
         log.info(f"Loaded {len(gdf):,} fire perimeters ({gdf['FIRE_YEAR'].min()}–{gdf['FIRE_YEAR'].max()})")
         return gdf
+
+    def _load_fire_history(self, perimeters: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        """BC perimeters with their year in the patch CRS, oldest first: NFDB from 1972 + seasons."""
+        parts = [perimeters[["FIRE_YEAR", "geometry"]].to_crs(OUTPUT_CRS)]
+        for nfdb in sorted(self.perimeters_dir.glob("nfdb_extracted/NFDB_poly_*.shp")):
+            # The filter column must be read too, or the filter silently matches nothing
+            old = gpd.read_file(
+                nfdb, where=f"SRC_AGENCY = '{self.province}'", columns=["YEAR", "SRC_AGENCY"]
+            ).rename(columns={"YEAR": "FIRE_YEAR"})
+            parts.append(old[["FIRE_YEAR", "geometry"]].to_crs(OUTPUT_CRS))
+        history = pd.concat(parts, ignore_index=True)
+        log.info(f"  Fire history: {len(history):,} perimeters from {history['FIRE_YEAR'].min()}")
+        return history[history.geometry.notna()].sort_values("FIRE_YEAR")
+
+    def _years_since_fire(
+        self, year: int, transform: rasterio.transform.Affine, shape: tuple[int, int]
+    ) -> np.ndarray:
+        """Years since each pixel last burned, from earlier seasons only so nothing leaks."""
+        west, south, east, north = rasterio.transform.array_bounds(*shape, transform)
+        history = self.fire_history
+        earlier = history[history["FIRE_YEAR"] < year].cx[west:east, south:north]
+        last = np.zeros(shape, dtype=np.float32)  # 0: no recorded fire
+        if len(earlier):
+            # Oldest first, so the most recent fire is drawn last and wins
+            shapes = zip(earlier.geometry, earlier["FIRE_YEAR"].astype(float))
+            rasterio.features.rasterize(shapes, out=last, transform=transform)
+        since = np.minimum(year - last, YEARS_SINCE_FIRE_CAP)
+        return np.where(last > 0, since, YEARS_SINCE_FIRE_CAP).astype(np.float32)
 
     def _process_year(self, perimeters: gpd.GeoDataFrame, year: int) -> list[PatchMeta]:
         """Extract all patches for one fire season."""
@@ -713,8 +745,8 @@ class PatchExtractor:
         # --- Previous fire mask (t=0) — provided by caller (synthetic progression) ---
         X[ch["PrevFireMask"]] = prev_mask
 
-        # BurnP3+ physics prior channel (zero-filled until Phase 2)
-        # X[ch["burnp3_burn_prob"]] = 0.0  # already zero from initialization
+        # --- Fire history: a recent burn has little fuel left to carry a fire ---
+        X[ch["years_since_fire"]] = self._years_since_fire(year, transform, shape)
 
         return X
 

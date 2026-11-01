@@ -23,9 +23,8 @@ import torch
 from src.utils.config import CHANNELS, VECTOR_CHANNEL_PAIRS
 
 
-# Index of PrevFireMask in the channel list (channel 17, 0-indexed)
-# This channel and burnp3_burn_prob (channel 18) are excluded from noise
-_MASK_CHANNEL_INDICES = {17, 18}
+# Binary mask channels are excluded from noise
+_MASK_CHANNEL_INDICES = {CHANNELS.index("PrevFireMask")}
 
 # East and north component channels; spatial transforms must turn these with the pixels.
 # Channels sit at dim -3 for both (C, H, W) frames and (T, C, H, W) sequences.
@@ -90,8 +89,7 @@ class GaussianNoise:
     """
     Add Gaussian noise to all non-mask input channels.
 
-    Mask channels (PrevFireMask, burnp3_burn_prob) are excluded to
-    avoid corrupting fire boundary and physics prior signals.
+    The PrevFireMask channel is excluded to avoid corrupting the fire boundary.
     """
 
     def __init__(self, std: float = 0.01):

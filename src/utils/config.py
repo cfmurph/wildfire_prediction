@@ -34,9 +34,8 @@ CHANNELS: list[str] = [
     "NDVI",
     "landcover",
     "PrevFireMask",
-    # Physics prior from BurnP3+ (Canadian Forest Service)
-    # Zero-filled when no BurnP3+ run available; ablation measures its value
-    "burnp3_burn_prob",
+    # Years since the pixel last burned, from earlier seasons only (capped at 40)
+    "years_since_fire",
 ]
 
 N_CHANNELS: int = len(CHANNELS)          # 19
@@ -96,7 +95,7 @@ class TrainingConfig:
 @dataclass
 class UNetConfig:
     name: str = "unet"
-    in_channels: int = N_CHANNELS   # 19 (18 obs + burnp3_burn_prob)
+    in_channels: int = N_CHANNELS   # 19
     base_filters: int = 32
     depth: int = 4
     dropout: float = 0.2
@@ -131,8 +130,8 @@ class BurnP3Config:
     physics prior — the ML model learns the residual correction on top of
     BurnP3+ burn probability outputs.
 
-    Phase 1: burnp3_burn_prob channel is zero-filled (no BurnP3+ install needed)
-    Phase 2: pysyncrosim drives live BurnP3+ scenarios; results fill the channel
+    Phase 1: no BurnP3+ channel; years_since_fire carries burn history instead
+    Phase 2: pysyncrosim drives live BurnP3+ scenarios; results fill a new channel
 
     Reference: https://burnp3.github.io/BurnP3Plus/
     Discord:   https://discord.gg/76QzY8eAYr
