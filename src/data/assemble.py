@@ -692,10 +692,13 @@ class PatchExtractor:
         for var_name, arr in self._load_fwi_patch(date_str, transform, shape).items():
             X[ch[var_name]] = arr
 
-        # --- NDVI (16-day composites — use most recent available) ---
+        # --- NDVI (16-day composites from scripts/prepare_ndvi.py) ---
         ndvi_path = self._find_ndvi(date_str)
-        if ndvi_path and ndvi_path.exists():
-            X[ch["NDVI"]] = reproject_to_patch_grid(ndvi_path, transform, OUTPUT_CRS, shape)
+        if ndvi_path:
+            ndvi = reproject_to_patch_grid(
+                ndvi_path, transform, OUTPUT_CRS, shape, fill_value=np.nan
+            )
+            X[ch["NDVI"]] = _fill_nan(ndvi)
 
         # --- Land cover (static) ---
         if self.landcover_path.exists():
@@ -720,20 +723,15 @@ class PatchExtractor:
     # ------------------------------------------------------------------
 
     def _find_ndvi(self, date_str: str) -> Optional[Path]:
-        """Return the MODIS NDVI composite covering date_str (±16 days)."""
+        """
+        The latest NDVI composite that ended by date_str, if it ended within 32 days.
+
+        A composite still running after the patch date could already show the next day's burn.
+        """
         target = pd.Timestamp(date_str)
-        best: Optional[Path] = None
-        best_delta = float("inf")
-        for f in self.ndvi_dir.glob("*.tif"):
-            try:
-                stem_date = pd.Timestamp(f.stem[-8:])
-                delta = abs((stem_date - target).days)
-                if delta < best_delta:
-                    best_delta = delta
-                    best = f
-            except Exception:
-                continue
-        return best if best_delta <= 16 else None
+        ended = [(pd.Timestamp(f.stem[-8:]), f) for f in self.ndvi_dir.glob("ndvi_*.tif")]
+        ended = [(d, f) for d, f in ended if pd.Timedelta(0) <= target - d <= pd.Timedelta(days=32)]
+        return max(ended)[1] if ended else None
 
     @staticmethod
     @functools.lru_cache(maxsize=4)
