@@ -7,7 +7,7 @@ FastAPI backend serving all four map views:
   /api/v1/fires/history  — BC historical perimeters by year
   /api/v1/weather/fwi    — current CWFIS fire weather
   /api/v1/predict/spread — next-day spread probability (heuristic → ML)
-  /api/v1/risk/map       — long-term burn likelihood grid
+  /api/v1/ignition/causes — where fires typically start, by month and cause
 
 Deployed on Railway. All secrets are environment variables.
 """
@@ -17,7 +17,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import fires, weather, predict, risk, ignition
+from api.routers import fires, weather, predict, ignition
 
 app = FastAPI(
     title="Wildfire Prediction API",
@@ -35,7 +35,6 @@ app.add_middleware(
 app.include_router(fires.router,     prefix="/api/v1/fires",     tags=["fires"])
 app.include_router(weather.router,   prefix="/api/v1/weather",   tags=["weather"])
 app.include_router(predict.router,   prefix="/api/v1/predict",   tags=["predict"])
-app.include_router(risk.router,      prefix="/api/v1/risk",      tags=["risk"])
 app.include_router(ignition.router,  prefix="/api/v1/ignition",  tags=["ignition"])
 
 

@@ -95,7 +95,7 @@ A MapLibre map of British Columbia with three views:
 
 - **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet).
 - **History**: BC fire perimeters by year, 2006 to the current season.
-- **Risk**: where fires tend to start in a given month, from the ignition model (`experiments/checkpoints/ignition_rf.joblib`), split into lightning- and human-caused layers. Its probabilities are not calibrated, so the map shows them relative to the month's highest value.
+- **Risk**: where fires typically start in a given month, split into lightning- and human-caused layers: recorded BC fire starts from the National Fire Database, 1996–2025, counted on a 5 km grid, smoothed over about 10 km and averaged per year. `scripts/compute_fire_starts.py` builds `data/processed/stats/fire_starts.json` from the points that `download_canada.py` fetches.
 
 ### Run locally
 
@@ -129,7 +129,7 @@ CI (`.github/workflows/test.yml`) runs the API and web suites on every PR to `ma
 
 ### Deploy
 
-**API on Railway.** `railway.toml` builds `api/Dockerfile` with the repository root as context, so the image includes `src/`, the ignition model, and the climatology stats. Do not set the service root to `api/`. Health check: `GET /health`.
+**API on Railway.** `railway.toml` builds `api/Dockerfile` with the repository root as context, so the image includes `src/` and the fire-start densities. Do not set the service root to `api/`. Health check: `GET /health`.
 
 **Web on Vercel.** Root directory `apps/web`, framework Next.js. `apps/web/vercel.json` skips the build when a commit does not touch `apps/web`.
 
@@ -152,7 +152,7 @@ wildfire_prediction/
 │   ├── processed/      # Assembled .npz patches + split manifests (gitignored, except two stats files the API reads)
 │   └── external/       # Alberta/Saskatchewan (Phase 2)
 ├── notebooks/          # EDA + experiment notebooks
-├── api/                # FastAPI service (Railway): fires, weather, spread, risk, ignition
+├── api/                # FastAPI service (Railway): fires, weather, spread, fire starts
 ├── apps/web/           # Next.js map (Vercel)
 ├── src/
 │   ├── data/           # Patch assembly + PyTorch Dataset + augmentation
