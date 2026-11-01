@@ -374,3 +374,18 @@ def test_synthetic_spread_follows_diagonal_wind():
     day1 = generate_daily_masks(final, 3, [40.0] * 3, [15.0] * 3, [225.0] * 3, [10.0] * 3)[1]
     assert day1[20 - 3, 20 + 3] and day1[20 + 3, 20 - 3]          # along the wind axis
     assert not day1[20 - 3, 20 - 3] and not day1[20 + 3, 20 + 3]  # across it
+
+
+def test_ndvi_uses_the_latest_composite_that_ended_by_the_patch_date(tmp_path):
+    from types import SimpleNamespace
+
+    from src.data.assemble import PatchExtractor
+
+    for day in ("20210711", "20210727", "20210812"):
+        (tmp_path / f"ndvi_{day}.tif").touch()
+    find = lambda date: PatchExtractor._find_ndvi(SimpleNamespace(ndvi_dir=tmp_path), date)  # noqa: E731
+    assert find("2021-07-27").name == "ndvi_20210727.tif"
+    # The composite ending 08-12 covers 07-28 onward, so it could show the next day's burn
+    assert find("2021-08-11").name == "ndvi_20210727.tif"
+    assert find("2021-04-01") is None
+    assert find("2021-10-01") is None

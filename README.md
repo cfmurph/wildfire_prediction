@@ -27,7 +27,7 @@ Assembled from open Canadian government and scientific sources:
 Patches: **64 × 64 pixels at 1 km/pixel** centered on active fire perimeters.
 Coverage: **BC fire seasons 2012–2023**.
 
-Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. Two of the 19 input channels are still zero-filled: NDVI (MODIS HDF needs `pyhdf`) and the BurnP3 burn probability.
+Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. NDVI comes from MODIS 16-day composites: run `scripts/prepare_ndvi.py` after downloading (it needs `pip install -e ".[data]"` for HDF4). Each patch uses the latest composite that ended by its date, so the input cannot show the next day's burn. The BurnP3 burn probability channel is zero-filled until BurnP3+ runs are available.
 
 **Targets are synthetic.** Perimeters give only a fire's final extent, so `generate_daily_masks` grows each fire from a seed toward its final perimeter, with daily spread scaled by FWI, ISI and wind. Scores therefore measure how well a model learns that generator, not real fire behaviour. Real VIIRS progression targets are the next step.
 
