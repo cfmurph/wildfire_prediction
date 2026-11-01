@@ -90,12 +90,11 @@ The package build backend is `setuptools.build_meta`. `pip install -e .` install
 
 ## Web app
 
-A MapLibre map of British Columbia with four views:
+A MapLibre map of British Columbia with three views:
 
-- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21), CWFIS fire weather, and an on-demand Grok situation report per fire.
-- **History**: BC fire perimeters by year (2012–2023).
-- **Predictions**: next-day spread ellipses from a wind- and FWI-driven heuristic (`api/services/predictor.py`). The trained ConvLSTM is not wired in yet.
-- **Risk**: monthly FWI climatology plus the ignition model (`experiments/checkpoints/ignition_rf.joblib`), split into lightning- and human-caused layers.
+- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet), and an optional Grok situation report.
+- **History**: BC fire perimeters by year, 2006 to the current season.
+- **Risk**: where fires tend to start in a given month, from the ignition model (`experiments/checkpoints/ignition_rf.joblib`), split into lightning- and human-caused layers. Its probabilities are not calibrated, so the map shows them relative to the month's highest value.
 
 ### Run locally
 

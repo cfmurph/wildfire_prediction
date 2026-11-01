@@ -4,7 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import ViewSwitcher, { View } from "@/components/ViewSwitcher";
 import FirePanel from "@/components/FirePanel";
-import RiskPanel from "@/components/RiskPanel";
+import RiskPanel, { RiskLayers } from "@/components/RiskPanel";
 import Header from "@/components/Header";
 import CurrentSummary from "@/components/CurrentSummary";
 import type { CurrentData } from "@/lib/fires";
@@ -39,8 +39,7 @@ export default function Home() {
   const [riskMonth, setRiskMonth] = useState(new Date().getMonth() + 1);
   const [selectedFire, setSelectedFire] = useState<SelectedFire | null>(null);
   const [currentData, setCurrentData] = useState<CurrentData | null>(null);
-  const [riskLayers, setRiskLayers] = useState({ lightning: true, human: true });
-  const [riskClickedPoint, setRiskClickedPoint] = useState<{ lat: number; lon: number } | null>(null);
+  const [riskLayers, setRiskLayers] = useState<RiskLayers>({ lightning: true, human: true });
 
   return (
     <div className="flex flex-col h-dvh overflow-hidden">
@@ -59,15 +58,11 @@ export default function Home() {
           />
           <div className="flex-1 overflow-y-auto sidebar-scroll">
             {view === "risk" ? (
-              <RiskPanel
-                month={riskMonth}
-                onLayerToggle={setRiskLayers}
-                clickedPoint={riskClickedPoint}
-              />
-            ) : !selectedFire && (view === "current" || view === "predictions") ? (
+              <RiskPanel month={riskMonth} layers={riskLayers} onLayerToggle={setRiskLayers} />
+            ) : !selectedFire && view === "current" ? (
               <CurrentSummary data={currentData} onSelect={setSelectedFire} />
             ) : (
-              <FirePanel fire={selectedFire} view={view} hotspots={currentData?.hotspots ?? []} onBack={() => setSelectedFire(null)} />
+              <FirePanel fire={selectedFire} hotspots={currentData?.hotspots ?? []} onBack={() => setSelectedFire(null)} />
             )}
           </div>
         </aside>
@@ -82,7 +77,6 @@ export default function Home() {
             riskLayers={riskLayers}
             onFireSelect={setSelectedFire}
             selectedFire={selectedFire}
-            onRiskPointClick={setRiskClickedPoint}
           />
         </main>
       </div>
