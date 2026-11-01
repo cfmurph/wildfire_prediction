@@ -47,7 +47,7 @@ Primary metric: **new-burn AUC-PR**, scored only on pixels not burned at day T. 
 python scripts/evaluate_checkpoints.py --split test
 ```
 
-Current U-Net result (test, seeds 42 / 1 / 2): **0.447 ± 0.064** new-burn AUC-PR against 0.177 for the distance baseline. On the September data, where most weather channels were empty, it scored 0.559 ± 0.012. The drop is under investigation: flip and rotation augmentation does not rotate the wind direction channel, which now drives the synthetic spread.
+Current U-Net result (test, seeds 42 / 1 / 2): **0.523 ± 0.016** new-burn AUC-PR (0.521 / 0.508 / 0.540) against 0.183 for the distance baseline. That is up from 0.447 ± 0.064 before terrain and wind were encoded as rotation-aware vectors and border pixels were filled; the September data, where most weather channels were empty, scored 0.559 ± 0.012. Two channels are still empty in the training split (NDVI and the Burn-P3 burn probability), so the model effectively sees 17 of 19.
 
 ---
 
