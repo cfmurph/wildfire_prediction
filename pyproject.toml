@@ -16,6 +16,7 @@ dependencies = [
     "torchvision>=0.18",
     # Classical ML
     "scikit-learn>=1.5",
+    "scipy>=1.11",
     # Numerical / data
     "numpy>=1.26",
     "pandas>=2.2",
