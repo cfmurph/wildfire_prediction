@@ -4,7 +4,7 @@ defaults:
 
 model:
   name: unet
-  in_channels: 19            # len(src.utils.config.CHANNELS), incl. burnp3_burn_prob
+  in_channels: 19            # len(src.utils.config.CHANNELS)
   base_filters: 32          # doubles at each encoder level: 32→64→128→256
   depth: 4                  # number of encoder/decoder levels
   dropout: 0.2

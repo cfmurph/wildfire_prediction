@@ -17,7 +17,7 @@ Both classes:
 Channel order follows CHANNELS in src/utils/config.py (19 channels total):
   elevation, slope_east, slope_north, wind_u, wind_v, temp_min, temp_max,
   humidity, precip, FFMC, DMC, DC, ISI, BUI, FWI, NDVI, landcover,
-  PrevFireMask, burnp3_burn_prob
+  PrevFireMask, years_since_fire
 """
 
 from __future__ import annotations

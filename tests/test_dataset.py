@@ -94,7 +94,7 @@ def synthetic_dataset(tmp_path):
     stats = {ch: {"mean": 0.5, "std": 0.3} for ch in ["elevation", "slope_east", "slope_north",
         "wind_u", "wind_v", "temp_min", "temp_max", "humidity", "precip",
         "FFMC", "DMC", "DC", "ISI", "BUI", "FWI", "NDVI", "landcover",
-        "PrevFireMask", "burnp3_burn_prob"]}
+        "PrevFireMask", "years_since_fire"]}
     (stats_dir / "channel_stats.json").write_text(json.dumps(stats))
 
     return {
@@ -306,15 +306,13 @@ class TestTransforms:
         assert (X_out[u, 0, 0].item(), X_out[v, 0, 0].item()) == (d_col, -d_row)
 
     def test_noise_preserves_mask_channels(self):
-        """Noise should NOT be applied to PrevFireMask (ch 17) or burnp3 (ch 18)."""
+        """Noise should NOT be applied to PrevFireMask."""
         from src.data.transforms import GaussianNoise
         X, y = self._make_tensors()
         X[17] = 0.5  # PrevFireMask
-        X[18] = 0.3  # burnp3_burn_prob
         t = GaussianNoise(std=1.0)  # large std to make effect obvious
         X_out, _ = t(X, y)
         assert torch.allclose(X_out[17], X[17]), "PrevFireMask should not be noised"
-        assert torch.allclose(X_out[18], X[18]), "burnp3_burn_prob should not be noised"
 
     def test_pipeline_no_op_eval(self):
         from src.data.transforms import build_eval_transforms
@@ -344,7 +342,7 @@ class TestChannelStats:
             "elevation", "slope_east", "slope_north", "wind_u", "wind_v",
             "temp_min", "temp_max", "humidity", "precip", "FFMC", "DMC",
             "DC", "ISI", "BUI", "FWI", "NDVI", "landcover", "PrevFireMask",
-            "burnp3_burn_prob",
+            "years_since_fire",
         ]}
         (tmp_path / "stats.json").write_text(json.dumps(stats_dict))
         stats = ChannelStats(tmp_path / "stats.json")
@@ -389,3 +387,25 @@ def test_ndvi_uses_the_latest_composite_that_ended_by_the_patch_date(tmp_path):
     assert find("2021-08-11").name == "ndvi_20210727.tif"
     assert find("2021-04-01") is None
     assert find("2021-10-01") is None
+
+
+def test_years_since_fire_uses_the_latest_earlier_season_only():
+    from types import SimpleNamespace
+
+    import geopandas as gpd
+    from rasterio.transform import from_origin
+    from shapely.geometry import box
+
+    from src.data.assemble import OUTPUT_CRS, YEARS_SINCE_FIRE_CAP, PatchExtractor
+
+    # 4 × 4 km patch; fires drawn on overlapping columns
+    history = gpd.GeoDataFrame(
+        {"FIRE_YEAR": [2000, 2010, 2015]},
+        geometry=[box(0, 0, 3000, 4000), box(0, 0, 1000, 4000), box(0, 0, 4000, 4000)],
+        crs=OUTPUT_CRS,
+    )
+    extractor = SimpleNamespace(fire_history=history)
+    transform = from_origin(0, 4000, 1000, 1000)
+    out = PatchExtractor._years_since_fire(extractor, 2015, transform, (4, 4))
+    # The 2015 fire is this season's, so it must not count
+    np.testing.assert_array_equal(out[0], [5, 15, 15, YEARS_SINCE_FIRE_CAP])
