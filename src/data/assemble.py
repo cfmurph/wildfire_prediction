@@ -35,6 +35,7 @@ import rasterio
 import rasterio.features
 import rasterio.transform
 import rasterio.warp
+import scipy.ndimage
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.transform import from_bounds
@@ -56,9 +57,10 @@ def firms_daily_masks(
 ) -> list[np.ndarray]:
     """
     Cumulative burn mask per day: a pixel has burned from the first day a detection
-    falls in it. Only pixels inside a recorded fire perimeter count, which drops
-    burning that is not a wildfire, such as slash piles. Detections before the first
-    day count as already burned, so pass one season's detections only.
+    falls in it. Only connected clusters of detections that reach into a recorded fire
+    perimeter count: that keeps growth past a perimeter mapped before the fire stopped,
+    and drops isolated burning that is not a wildfire, such as slash piles. Detections
+    before the first day count as already burned, so pass one season's detections only.
     """
     rows, cols = rasterio.transform.rowcol(transform, detections["x"], detections["y"])
     rows, cols = np.asarray(rows), np.asarray(cols)
@@ -68,7 +70,10 @@ def firms_daily_masks(
     keep = (rows >= 0) & (rows < H) & (cols >= 0) & (cols < W) & (day < len(dates))
     first = np.full((H, W), len(dates))
     np.minimum.at(first, (rows[keep], cols[keep]), day[keep])
-    first[perimeter == 0] = len(dates)
+    burned = first < len(dates)
+    clusters, _ = scipy.ndimage.label(burned, structure=np.ones((3, 3)))
+    fire_clusters = np.unique(clusters[burned & (perimeter > 0)])
+    first[~np.isin(clusters, fire_clusters[fire_clusters > 0])] = len(dates)
     return [(first <= i).astype(np.float32) for i in range(len(dates))]
 
 # ---------------------------------------------------------------------------

@@ -285,18 +285,19 @@ def test_firms_masks_grow_from_detections_inside_the_perimeter():
     perimeter[:, :2] = 1
     dates = list(pd.date_range("2023-07-01", periods=3))
     detections = pd.DataFrame({
-        "x": [500, 1500, 1500, 3500, 500],
-        "y": [3500, 3500, 2500, 3500, 500],
+        "x": [500, 1500, 1500, 3500, 500, 2500],
+        "y": [3500, 3500, 2500, 3500, 500, 1500],
         "date": pd.to_datetime(
-            ["2023-07-01", "2023-07-02", "2023-07-02", "2023-07-01", "2023-06-30"]
+            ["2023-07-01", "2023-07-02", "2023-07-02", "2023-07-01", "2023-06-30", "2023-07-03"]
         ),
     })
     day0, day1, day2 = firms_daily_masks(detections, dates, transform, perimeter)
     # Burned before the first day counts as already burned on it
     assert day0.sum() == 2 and day0[0, 0] and day0[3, 0]
     assert day1.sum() == 4 and day1[0, 1] and day1[1, 1]
-    assert (day2 == day1).all()
-    # Outside the perimeter (slash pile): never counted
+    # Growth past the mapped perimeter, connected to the fire inside it, counts
+    assert day2.sum() == 5 and day2[2, 2]
+    # An isolated detection outside every perimeter (slash pile) never counts
     assert not day2[0, 3]
 
 
