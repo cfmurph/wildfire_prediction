@@ -35,12 +35,9 @@ dependencies = [
     # Visualization
     "matplotlib>=3.8",
     "folium>=0.16",
-    "seaborn>=0.13",
     # HTTP / downloads
     "requests>=2.31",
     "tqdm>=4.66",
-    # xAI Grok (OpenAI-compatible client)
-    "openai>=1.30",
 ]
 
 [project.optional-dependencies]

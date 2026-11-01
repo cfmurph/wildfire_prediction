@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import logging
-import sys
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -692,46 +691,6 @@ def download_modis_ndvi(dest_dir: Path, years: list[int]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BurnP3+ setup instructions
-# ---------------------------------------------------------------------------
-
-def print_burnp3_instructions() -> None:
-    """
-    Print setup instructions for BurnP3+ (not auto-downloaded — requires
-    SyncroSim installation).
-    """
-    print("""
-=== BurnP3+ Physics-Based Fire Growth Model ===
-
-BurnP3+ (Canadian Forest Service) provides Monte Carlo fire spread simulation
-using the FBP system. It is the Canadian equivalent of FireBench.
-
-It is NOT downloaded automatically — it requires SyncroSim platform installation.
-
-Setup:
-  1. Install SyncroSim (Windows/Linux): https://syncrosim.com/download/
-  2. Install BurnP3+ package:
-       pip install pysyncrosim
-       import syncrosim as ss
-       ss.package.install("burnp3")
-  3. Install a fire growth engine:
-       - FireSTARR: https://github.com/CWFMF/FireSTARR
-       - Prometheus: https://firegrowthmodel.ca/#/prometheus_software
-
-Integration plan (Phase 2):
-  - Use BurnP3+ via pysyncrosim to run 100s of fire scenarios per historical
-    weather year, varying ignition location and weather within FWI uncertainty
-  - Use simulated burn probability rasters as:
-    (a) Additional training samples (augmented dataset)
-    (b) Physics-informed prior feature channel ("burnp3_burn_prob")
-  - This enables the real-data + simulated-data foundation model training track
-
-Reference: https://burnp3.github.io/BurnP3Plus/
-Discord:   https://discord.gg/76QzY8eAYr
-""")
-
-
-# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -759,18 +718,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-modis", action="store_true", help="Skip MODIS NDVI download (requires Earthdata)"
     )
-    parser.add_argument(
-        "--burnp3-info", action="store_true", help="Print BurnP3+ setup instructions and exit"
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-
-    if args.burnp3_info:
-        print_burnp3_instructions()
-        sys.exit(0)
 
     years = list(range(args.years[0], args.years[1] + 1))
     data_dir = Path(args.data_dir)
@@ -810,8 +762,6 @@ def main() -> None:
 
     log.info("\n✓ All downloads complete. Run next:")
     log.info("  python scripts/assemble_patches.py --province BC")
-    log.info("\nFor BurnP3+ setup (Phase 2 simulation augmentation):")
-    log.info("  python scripts/download_canada.py --burnp3-info")
 
 
 if __name__ == "__main__":

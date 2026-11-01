@@ -51,8 +51,7 @@ async def risk_map():
     """
     Long-term burn likelihood grid for BC — current month climatology.
 
-    Phase 1: Historical burn frequency climatology.
-    Phase 2: BurnP3+ simulated burn probability surfaces.
+    Historical burn frequency climatology.
     """
     return predictor.risk_grid()
 

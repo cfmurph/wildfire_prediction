@@ -2,7 +2,7 @@
 
 > **Phase 1** — Benchmark dataset construction and ML baseline for next-day wildfire spread prediction in British Columbia.
 
-There is no published ML benchmark for Canadian wildfire spread prediction. This project builds one from open data and establishes reproducible baselines using Random Forest, U-Net CNN, and ConvLSTM models — with xAI/Grok powering the decision-support layer.
+There is no published ML benchmark for Canadian wildfire spread prediction. This project builds one from open data and establishes reproducible baselines using Random Forest, U-Net CNN, and ConvLSTM models.
 
 ---
 
@@ -27,7 +27,7 @@ Assembled from open Canadian government and scientific sources:
 Patches: **64 × 64 pixels at 1 km/pixel** centered on active fire perimeters.
 Coverage: **BC fire seasons 2012–2023**.
 
-Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. NDVI comes from MODIS 16-day composites: run `scripts/prepare_ndvi.py` after downloading (it needs `pip install -e ".[data]"` for HDF4). Each patch uses the latest composite that ended by its date, so the input cannot show the next day's burn. The BurnP3 burn probability channel is zero-filled until BurnP3+ runs are available.
+Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. NDVI comes from MODIS 16-day composites: run `scripts/prepare_ndvi.py` after downloading (it needs `pip install -e ".[data]"` for HDF4). Each patch uses the latest composite that ended by its date, so the input cannot show the next day's burn. `years_since_fire` gives the years since each pixel last burned, from BC fire perimeters back to 1972 (earlier seasons only, capped at 40).
 
 **Targets come from satellite detections.** Perimeters give only a fire's final extent, so `firms_daily_masks` marks a pixel burned from the first day a NASA FIRMS VIIRS detection (Suomi NPP and NOAA-20, 375 m) falls in it. Only detections inside the fire's own final perimeter count, which drops other fires and non-wildfire burning such as slash piles. Cloud and smoke can hide burning, so some burned pixels are never detected.
 
@@ -93,7 +93,7 @@ The package build backend is `setuptools.build_meta`. `pip install -e .` install
 
 A MapLibre map of British Columbia with three views:
 
-- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet), and an optional Grok situation report.
+- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet).
 - **History**: BC fire perimeters by year, 2006 to the current season.
 - **Risk**: where fires tend to start in a given month, from the ignition model (`experiments/checkpoints/ignition_rf.joblib`), split into lightning- and human-caused layers. Its probabilities are not calibrated, so the map shows them relative to the month's highest value.
 
@@ -103,7 +103,7 @@ A MapLibre map of British Columbia with three views:
 # API: Python 3.11+, lightweight deps only (no PyTorch)
 python -m venv .venv && source .venv/bin/activate
 pip install -r api/requirements.txt
-cp api/.env.example api/.env   # fill in FIRMS_MAP_KEY and XAI_API_KEY
+cp api/.env.example api/.env   # fill in FIRMS_MAP_KEY
 set -a && source api/.env && set +a
 uvicorn api.main:app --reload --port 8000
 
@@ -120,7 +120,7 @@ Open http://localhost:3000. API docs are at http://localhost:8000/docs.
 
 ```bash
 pip install -r api/requirements-dev.txt
-pytest -c api/pytest.ini --rootdir api api/api_tests   # API (network and Grok are mocked)
+pytest -c api/pytest.ini --rootdir api api/api_tests   # API (network is mocked)
 pytest tests/                                         # research
 cd apps/web && npm test && npm run test:e2e           # web unit + Playwright
 ```
@@ -138,11 +138,8 @@ CI (`.github/workflows/test.yml`) runs the API and web suites on every PR to `ma
 | Variable | Service | Required | Purpose |
 |---|---|---|---|
 | `FIRMS_MAP_KEY` | API | for hotspots | NASA FIRMS map key |
-| `XAI_API_KEY` | API | for situation reports | xAI Grok key |
 | `CORS_ORIGINS` | API | in production | Comma-separated browser origins (the Vercel URL). Defaults to `http://localhost:3000` |
 | `NEXT_PUBLIC_API_URL` | Web | in production | Railway API URL, no trailing slash |
-
-`POST /api/v1/situation` calls the billed Grok API and is capped at 60 reports per hour per API process.
 
 ---
 
@@ -155,16 +152,14 @@ wildfire_prediction/
 │   ├── processed/      # Assembled .npz patches + split manifests (gitignored, except two stats files the API reads)
 │   └── external/       # Alberta/Saskatchewan (Phase 2)
 ├── notebooks/          # EDA + experiment notebooks
-├── api/                # FastAPI service (Railway): fires, weather, spread, risk, ignition, Grok reports
+├── api/                # FastAPI service (Railway): fires, weather, spread, risk, ignition
 ├── apps/web/           # Next.js map (Vercel)
 ├── src/
 │   ├── data/           # Patch assembly + PyTorch Dataset + augmentation
 │   ├── models/         # RF, U-Net, ConvLSTM
 │   ├── training/       # Training loop + evaluation
-│   ├── response/       # xAI Grok decision-support client
 │   └── utils/          # Metrics, visualization, config
 ├── configs/            # Hydra YAML configs
-├── prompts/            # Grok prompt templates
 ├── experiments/        # MLflow tracking root
 ├── scripts/            # Data download, patch assembly, checkpoint evaluation
 └── tests/              # Research tests (API tests live in api/api_tests)
