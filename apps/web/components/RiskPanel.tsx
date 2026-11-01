@@ -13,10 +13,7 @@ interface Props {
   onLayerToggle: (layers: RiskLayers) => void;
 }
 
-/**
- * The ignition model's absolute probabilities are not calibrated, so this view
- * only says where fires are more or less likely to start within a month.
- */
+/** Where fires typically start in a month, from recorded fire starts (scripts/compute_fire_starts.py). */
 export default function RiskPanel({ month, layers, onLayerToggle }: Props) {
   const name = MONTH_NAMES[month - 1];
   const toggles = [
@@ -29,15 +26,15 @@ export default function RiskPanel({ month, layers, onLayerToggle }: Props) {
       <div>
         <h2 className="font-semibold text-white text-base">{name}: where fires tend to start</h2>
         <p className="text-xs text-gray-400 mt-1 leading-relaxed">
-          Bigger circles mark places where a fire is more likely to start in a typical {name}, compared with the
-          rest of BC. The ranking comes from past fire starts, lightning, human activity and the month&apos;s usual
-          fire weather.
+          Recorded fire starts in {name}, 1996–2025, averaged per year and smoothed over about 10 km. Faint areas
+          see about one start per 1,000 km² every ten {name}s; the strongest colour is two or more per 1,000 km²
+          in a typical {name}.
         </p>
       </div>
 
       <p className="text-xs text-gray-500 bg-gray-800 rounded-lg p-3 leading-relaxed">
-        This is a relative ranking, not a probability and not today&apos;s fire danger. For current conditions,
-        see the Current tab or the BC Wildfire Service danger rating.
+        This is history, not today&apos;s fire danger. For current conditions, see the Current tab or the BC
+        Wildfire Service danger rating.
       </p>
 
       <div className="space-y-1.5">

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import tomllib
 from pathlib import Path
 
 import httpx
 import pytest
-from api.services.predictor import risk_grid, spread_forecast
+from api.services.predictor import spread_forecast
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -221,7 +220,7 @@ def test_history_falls_back_to_the_current_season_layer(client, monkeypatch):
     assert props["fire_status"] == "Out"
 
 
-def test_predict_and_risk_are_local_heuristics(client):
+def test_predict_is_a_local_heuristic(client):
     spread = client.get(
         "/api/v1/predict/spread",
         params={"lat": 53.0, "lon": -124.0, "wind_dir": 270, "wind_speed": 5, "fwi": 20, "isi": 8},
@@ -237,14 +236,6 @@ def test_predict_and_risk_are_local_heuristics(client):
         "p50",
         "p75",
     }
-
-    risk = client.get("/api/v1/risk/map")
-    assert risk.status_code == 200
-    grid = risk.json()
-    assert grid["metadata"]["model"] == "climatology_v1"
-    assert grid["features"]
-    assert all(0 < item["properties"]["burn_probability"] <= 1 for item in grid["features"])
-    assert risk_grid(n_lat=5, n_lon=5)["features"]
 
 
 def test_weather_does_not_invent_stations_when_upstream_fails(client, monkeypatch):
@@ -296,3 +287,21 @@ def test_cors_allows_only_configured_origins(client):
     blocked = client.get("/health", headers={"Origin": "https://evil.example"})
     assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
     assert "access-control-allow-origin" not in blocked.headers
+
+
+def test_fire_starts_follow_the_season_and_never_invent_data(client, monkeypatch, tmp_path):
+    july = client.get("/api/v1/ignition/causes?month=7").json()
+    january = client.get("/api/v1/ignition/causes?month=1").json()
+    assert len(july["lightning"]["features"]) > 1000
+    assert len(january["lightning"]["features"]) == 0
+    assert july["unit"] == "fire starts per 1,000 km² in a typical month"
+    assert all(f["properties"]["starts"] > 0 for f in july["human"]["features"])
+
+    from api.routers import ignition
+
+    monkeypatch.setattr(ignition, "FIRE_STARTS", tmp_path / "missing.json")
+    ignition._fire_starts.cache_clear()
+    try:
+        assert client.get("/api/v1/ignition/causes?month=7").status_code == 503
+    finally:
+        ignition._fire_starts.cache_clear()

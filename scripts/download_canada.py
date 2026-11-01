@@ -8,8 +8,7 @@ Prediction benchmark:
   1. BC historical fire perimeters  (Open Government BC)
   2. NASA FIRMS active-fire archive  (MODIS 1 km, VIIRS 375 m; BC bounding box)
   3. ERA5 weather reanalysis         (Copernicus CDS)
-  4. ERA5-HRS FWI indices            (Zenodo, McElhinny et al. 2020)
-     — overwintered DC recommended for western Canada
+  4. NFDB fire-start points          (CWFIS; the map's Risk view)
   5. CEMS fire danger reanalysis     (EWDS, FWI indices for all years)
   6. Canadian Digital Elevation Model (CDEM, NRCan)
   7. Canada Land Cover 2020          (NRCan)
@@ -36,7 +35,6 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
 
 import requests
 from tqdm import tqdm
@@ -53,23 +51,6 @@ BC_BBOX = {
     "lon_max": -114.0,
     "lat_max": 60.0,
 }
-
-# ---------------------------------------------------------------------------
-# ERA5-HRS FWI Zenodo DOIs (overwintered DC — recommended for western Canada)
-# McElhinny et al. 2020, doi:10.5281/zenodo.3626193
-# ---------------------------------------------------------------------------
-FWI_ZENODO_DOIS_OVERWINTERED = {
-    "FFMC": "10.5281/zenodo.3540922",
-    "DMC":  "10.5281/zenodo.3540924",
-    "DC":   "10.5281/zenodo.3540926",
-    "ISI":  "10.5281/zenodo.3540920",
-    "BUI":  "10.5281/zenodo.3540918",
-    "FWI":  "10.5281/zenodo.3539654",
-    "DSR":  "10.5281/zenodo.3540928",
-}
-
-ZENODO_API = "https://zenodo.org/api/records"
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -98,24 +79,6 @@ def _download_file(url: str, dest: Path, desc: str = "", chunk_size: int = 8192)
             bar.update(size)
 
     return dest
-
-
-def _zenodo_files(doi: str) -> list[dict]:
-    """
-    Return file metadata list for a Zenodo record identified by its DOI.
-
-    DOI format: "10.5281/zenodo.3540922"
-    Record ID (numeric only): "3540922"
-    API URL: https://zenodo.org/api/records/3540922
-    """
-    # Extract numeric record ID from DOI (strip "zenodo." prefix if present)
-    raw_id = doi.split("/")[-1]                    # e.g. "zenodo.3540922"
-    record_id = raw_id.replace("zenodo.", "")      # e.g. "3540922"
-    resp = requests.get(f"{ZENODO_API}/{record_id}", timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    # Zenodo API v2 returns files under "files" key; each has "key" and "links.self"
-    return data.get("files", [])
 
 
 # ---------------------------------------------------------------------------
@@ -332,79 +295,23 @@ def download_era5(dest_dir: Path, years: list[int]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. ERA5-HRS FWI Indices (Zenodo, McElhinny et al. 2020)
+# 4. NFDB fire starts (the map's Risk view)
 # ---------------------------------------------------------------------------
 
-def download_fwi_zenodo(
-    dest_dir: Path,
-    years: list[int],
-    variables: Optional[list[str]] = None,
-) -> None:
-    """
-    Download ERA5-HRS Fire Weather Index system indices from Zenodo.
+NFDB_POINTS = "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_pnt/current_version/NFDB_point_shp.zip"
 
-    Source: McElhinny et al. 2020, doi:10.5281/zenodo.3626193
-    Uses the overwintered DC version (recommended for western Canada).
-    Coverage: 1979–2018 (daily, global, NetCDF).
 
-    Used only for the API's FWI climatology; patch channels come from
-    download_fwi_cems, which covers every year.
-
-    Variables: FFMC, DMC, DC, ISI, BUI, FWI (DSR optional)
-    """
-    log.info("=== ERA5-HRS FWI indices (Zenodo, overwintered DC) ===")
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    if variables is None:
-        variables = ["FFMC", "DMC", "DC", "ISI", "BUI", "FWI"]
-
-    zenodo_years = [y for y in years if y <= 2018]
-    if not zenodo_years:
-        log.info("  No Zenodo-covered years (≤2018) in request; skipping.")
+def download_fire_starts(dest_dir: Path) -> None:
+    """Canadian National Fire Database fire-start points, all agencies and years."""
+    log.info("=== NFDB fire starts ===")
+    out = dest_dir / "nfdb_points"
+    if any(out.glob("NFDB_point*.shp")):
+        log.info(f"  already exists: {out}")
         return
-
-    for var in variables:
-        doi = FWI_ZENODO_DOIS_OVERWINTERED.get(var)
-        if not doi:
-            log.warning(f"  No DOI found for {var}, skipping.")
-            continue
-
-        var_dir = dest_dir / var.lower()
-        var_dir.mkdir(parents=True, exist_ok=True)
-
-        log.info(f"  Fetching file list for {var} (DOI: {doi})…")
-        try:
-            files = _zenodo_files(doi)
-        except Exception as exc:
-            log.error(f"  Could not fetch Zenodo record for {var}: {exc}")
-            continue
-
-        for file_info in files:
-            fname: str = file_info.get("key", "")
-            fsize: int = file_info.get("size", 0)
-            furl: str = file_info.get("links", {}).get("self", "")
-
-            # Files are named like "FFMC_1979.nc", "FFMC_1980.nc", …
-            # Filter to only the years we need
-            try:
-                file_year = int(fname.replace(".nc", "").split("_")[-1])
-            except ValueError:
-                continue
-            if file_year not in zenodo_years:
-                continue
-
-            out = var_dir / fname
-            if out.exists():
-                log.info(f"    already exists: {fname}")
-                continue
-
-            log.info(f"    Downloading {fname} ({fsize / 1e6:.1f} MB)…")
-            try:
-                _download_file(furl, out, fname)
-            except Exception as exc:
-                log.error(f"    {fname} failed: {exc}")
-
-    log.info("  ERA5-HRS FWI download complete.")
+    archive = _download_file(NFDB_POINTS, dest_dir / "NFDB_point_shp.zip", "NFDB fire starts")
+    with zipfile.ZipFile(archive) as z:
+        z.extractall(out)
+    log.info(f"  Saved → {out} (next: python scripts/compute_fire_starts.py)")
 
 
 # ---------------------------------------------------------------------------
@@ -742,8 +649,8 @@ def main() -> None:
     else:
         log.info("=== ERA5: skipped ===")
 
-    # 4. ERA5-HRS FWI (Zenodo, 2012–2018)
-    download_fwi_zenodo(data_dir / "fwi", years)
+    # 4. NFDB fire starts
+    download_fire_starts(data_dir / "ignition")
 
     # 5. CEMS FWI, all years (the patch channels)
     download_fwi_cems(data_dir / "fwi", years)

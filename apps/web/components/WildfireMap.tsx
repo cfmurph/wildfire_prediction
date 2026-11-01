@@ -279,13 +279,11 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     } catch {}
     if (!map.current || !causes) return;
 
-    // The model's probabilities are not calibrated: size circles relative to this month's highest value
-    const peak = Math.max(1e-6, ...[causes.lightning, causes.human].flatMap((c) => c.features.map((f) => Number(f.properties?.prob) || 0)));
     const layers = [
-      { id: "ignition-lightning", data: causes.lightning, color: "#3b82f6", stroke: "#1d4ed8" },
-      { id: "ignition-human",     data: causes.human,     color: "#f59e0b", stroke: "#d97706" },
+      { id: "ignition-lightning", data: causes.lightning, color: "#3b82f6" },
+      { id: "ignition-human",     data: causes.human,     color: "#f59e0b" },
     ];
-    for (const { id, data, color, stroke } of layers) {
+    for (const { id, data, color } of layers) {
       if (!data?.features?.length) continue;
       map.current.addSource(id, { type: "geojson", data });
       map.current.addLayer({
@@ -293,11 +291,11 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
         type: "circle",
         source: id,
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["/", ["get", "prob"], peak], 0, 2, 1, 18],
+          // One circle per 5 km cell, growing with zoom so the cells stay touching
+          "circle-radius": ["interpolate", ["exponential", 2], ["zoom"], 5, 2.2, 10, 70],
           "circle-color": color,
-          "circle-opacity": 0.7,
-          "circle-stroke-color": stroke,
-          "circle-stroke-width": 0.5,
+          // Fixed scale in fire starts per 1,000 km², so months compare directly
+          "circle-opacity": ["interpolate", ["linear"], ["get", "starts"], 0.1, 0.3, 2, 0.95],
         },
       });
     }
