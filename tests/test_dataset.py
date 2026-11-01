@@ -365,13 +365,29 @@ def test_channel_stats_give_vector_pairs_zero_mean_and_one_scale(tmp_path):
     assert stats["FWI"] == {"mean": 1.0, "std": 0.0}
 
 
-def test_synthetic_spread_follows_diagonal_wind():
-    from src.data.assemble import generate_daily_masks
-    final = np.ones((41, 41), dtype=np.float32)
-    # Wind from the south-west pushes the fire north-east (up and right in the array)
-    day1 = generate_daily_masks(final, 3, [40.0] * 3, [15.0] * 3, [225.0] * 3, [10.0] * 3)[1]
-    assert day1[20 - 3, 20 + 3] and day1[20 + 3, 20 - 3]          # along the wind axis
-    assert not day1[20 - 3, 20 - 3] and not day1[20 + 3, 20 + 3]  # across it
+def test_firms_masks_grow_from_detections_inside_the_perimeter():
+    import pandas as pd
+    from rasterio.transform import from_origin
+
+    from src.data.assemble import firms_daily_masks
+
+    transform = from_origin(0, 4000, 1000, 1000)  # 4 × 4 km, rows run south
+    perimeter = np.zeros((4, 4), dtype=np.float32)
+    perimeter[:, :2] = 1
+    dates = list(pd.date_range("2023-07-01", periods=3))
+    detections = pd.DataFrame({
+        "x": [500, 1500, 1500, 3500, 500],
+        "y": [3500, 3500, 2500, 3500, 500],
+        "date": pd.to_datetime(
+            ["2023-07-01", "2023-07-02", "2023-07-02", "2023-07-01", "2023-06-30"]
+        ),
+    })
+    day0, day1, day2 = firms_daily_masks(detections, dates, transform, perimeter)
+    assert day0.sum() == 1 and day0[0, 0]
+    assert day1.sum() == 3 and day1[0, 1] and day1[1, 1]
+    assert (day2 == day1).all()
+    # Outside the perimeter (slash pile) and before the first day: never counted
+    assert not day2[0, 3] and not day2[3, 0]
 
 
 def test_ndvi_uses_the_latest_composite_that_ended_by_the_patch_date(tmp_path):
