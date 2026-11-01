@@ -25,10 +25,6 @@ export type SelectedFire = {
   lat: number;
   lon: number;
   size_ha: number;
-  fwi?: number;
-  isi?: number;
-  wind_speed_ms?: number;
-  wind_dir_deg?: number;
   source: "active" | "hotspot" | "history";
   properties: Record<string, unknown>;
 };

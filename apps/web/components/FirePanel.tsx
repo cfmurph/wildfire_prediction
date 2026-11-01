@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Flame, Wind, Thermometer, Loader2, AlertTriangle, ArrowLeft, ExternalLink } from "lucide-react";
+import { Flame, Wind, ArrowLeft, ExternalLink } from "lucide-react";
 import { SelectedFire } from "@/app/page";
 import { cn, fwiColor, fwiLabel, kmBetween, statusColor } from "@/lib/utils";
 
@@ -20,24 +20,11 @@ type Spread = { p25: number; p50: number; p75: number; dir: number };
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
 export default function FirePanel({ fire, hotspots = [], onBack }: Props) {
-  const [report, setReport] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   // undefined while loading, null when no station is reporting nearby
   const [station, setStation] = useState<Station | null | undefined>(undefined);
   const [spread, setSpread] = useState<Spread | null>(null);
-  const [reportsAvailable, setReportsAvailable] = useState(false);
 
   useEffect(() => {
-    fetch(`${API}/api/v1/situation/available`)
-      .then((r) => r.json())
-      .then((d) => setReportsAvailable(d?.available === true))
-      .catch(() => setReportsAvailable(false));
-  }, []);
-
-  useEffect(() => {
-    setReport(null);
-    setError(null);
     setStation(undefined);
     setSpread(null);
     if (!fire || fire.source !== "active") return;
@@ -58,33 +45,6 @@ export default function FirePanel({ fire, hotspots = [], onBack }: Props) {
       .catch(() => { if (!cancelled) setStation((s) => s ?? null); });
     return () => { cancelled = true; };
   }, [fire]);
-
-  async function generateReport() {
-    if (!fire) return;
-    setLoading(true);
-    setError(null);
-    setReport(null);
-    try {
-      const res = await fetch(`${API}/api/v1/situation`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fire_id: fire.fire_id,
-          fire_name: fire.fire_name,
-          lat: fire.lat,
-          lon: fire.lon,
-          current_area_ha: fire.size_ha,
-        }),
-      });
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
-      setReport(data.report);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Request failed");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   if (!fire) {
     return (
@@ -180,41 +140,6 @@ export default function FirePanel({ fire, hotspots = [], onBack }: Props) {
         </a>
       )}
 
-      {/* AI situation report, only when the API has a key */}
-      {reportsAvailable && (
-        <div>
-          <button
-            onClick={generateReport}
-            disabled={loading}
-            className={cn(
-              "w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-medium transition-colors",
-              loading
-                ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                : "bg-orange-600 hover:bg-orange-500 text-white"
-            )}
-          >
-            {loading ? (
-              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating…</>
-            ) : (
-              <><Flame className="w-3.5 h-3.5" /> Generate Situation Report</>
-            )}
-          </button>
-
-          {error && (
-            <div className="mt-2 flex gap-2 text-xs text-red-400 bg-red-950/30 rounded p-2">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-              {error}
-            </div>
-          )}
-
-          {report && (
-            <div className="mt-3 text-xs text-gray-300 bg-gray-800 rounded-lg p-3 leading-relaxed whitespace-pre-wrap">
-              {renderEmphasis(report)}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Raw properties (collapsed) */}
       <details className="text-xs text-gray-500">
         <summary className="cursor-pointer hover:text-gray-300 transition-colors">
@@ -249,14 +174,5 @@ function Stat({
         </span>
       )}
     </div>
-  );
-}
-
-/** Render the **bold** and _italic_ the briefings use, without injecting HTML. */
-function renderEmphasis(text: string) {
-  return text.split(/(\*\*[^*]+\*\*|(?<!\w)_[^\n]+?_(?!\w))/).map((part, i) =>
-    part.startsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong>
-    : part.startsWith("_") && part.length > 1 ? <em key={i}>{part.slice(1, -1)}</em>
-    : part
   );
 }

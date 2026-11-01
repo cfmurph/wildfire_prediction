@@ -179,8 +179,6 @@ def risk_grid(n_lat: int = 40, n_lon: int = 40) -> dict:
 
     Phase 1: climatology-based estimate from historical burn frequency patterns.
     Uses BC Interior fire climatology — highest risk in central/NE interior.
-
-    Phase 2: replace with BurnP3+ outputs or trained risk model.
     """
     lat_min, lat_max = 49.0, 59.5
     lon_min, lon_max = -139.0, -114.5
@@ -215,7 +213,7 @@ def risk_grid(n_lat: int = 40, n_lon: int = 40) -> dict:
         "features": features,
         "metadata": {
             "model": "climatology_v1",
-            "note": "Historical burn frequency climatology. BurnP3+ replaces this in Phase 2.",
+            "note": "Historical burn frequency climatology.",
             "resolution_deg": round((lat_max - lat_min) / n_lat, 3),
         },
     }

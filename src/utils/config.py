@@ -122,40 +122,6 @@ class RFConfig:
 
 
 @dataclass
-class BurnP3Config:
-    """
-    BurnP3+ physics simulation integration (Phase 2).
-
-    BurnP3+ is the CFS operational fire spread model. We integrate it as a
-    physics prior — the ML model learns the residual correction on top of
-    BurnP3+ burn probability outputs.
-
-    Phase 1: no BurnP3+ channel; years_since_fire carries burn history instead
-    Phase 2: pysyncrosim drives live BurnP3+ scenarios; results fill a new channel
-
-    Reference: https://burnp3.github.io/BurnP3Plus/
-    Discord:   https://discord.gg/76QzY8eAYr
-    Contact:   info@burnp3plus.ca
-    """
-    enabled: bool = False                   # True in Phase 2
-    syncrosim_version: str = "3.0.9"
-    fire_growth_model: str = "FireSTARR"    # or "Prometheus"
-    n_iterations: int = 100                 # Monte Carlo draws per scenario
-    weather_uncertainty: float = 0.1       # fractional perturbation for stochastic weather
-    output_channel: str = "burnp3_burn_prob"
-
-
-@dataclass
 class MLflowConfig:
     experiment_name: str = "wildfire-phase1"
     tracking_uri: str = "experiments/mlruns"
-
-
-@dataclass
-class GrokConfig:
-    base_url: str = "https://api.x.ai/v1"
-    model: str = "grok-3"
-    max_tokens: int = 2048
-    temperature: float = 0.2
-    timeout_seconds: int = 30
-    situation_report_prompt: str = "prompts/situation_report.txt"
