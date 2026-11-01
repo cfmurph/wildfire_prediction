@@ -66,6 +66,7 @@ pip install -e ".[dev]"
 # "cems-fire-historical-v1" dataset page at https://ewds.climate.copernicus.eu
 
 # 4. Download Canadian data
+# The FIRMS fire-detection archive (data/raw/firms) needs no key; MODIS goes back to 2000
 python scripts/download_canada.py --province BC --years 2012 2023
 
 # 5. Assemble patches

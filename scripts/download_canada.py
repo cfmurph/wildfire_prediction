@@ -6,7 +6,7 @@ Downloads all raw data required for Phase 1 of the Canadian Wildfire Spread
 Prediction benchmark:
 
   1. BC historical fire perimeters  (Open Government BC)
-  2. NASA FIRMS active-fire hotspots (VIIRS 375 m, BC bounding box)
+  2. NASA FIRMS active-fire archive  (MODIS 1 km, VIIRS 375 m; BC bounding box)
   3. ERA5 weather reanalysis         (Copernicus CDS)
   4. ERA5-HRS FWI indices            (Zenodo, McElhinny et al. 2020)
      — overwintered DC recommended for western Canada
@@ -23,8 +23,6 @@ Notes
 -----
 - ERA5 download requires a ~/.cdsapirc file with a Copernicus CDS API key.
   Register at: https://cds.climate.copernicus.eu
-- FIRMS download requires a free MAP_KEY from https://firms.modaps.eosdis.nasa.gov/api/
-  Set it as environment variable: export FIRMS_MAP_KEY=your_key_here
 - MODIS download uses NASA earthaccess (free account required):
   https://urs.earthdata.nasa.gov/
 """
@@ -34,7 +32,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import logging
-import os
 import sys
 import time
 import zipfile
@@ -204,93 +201,35 @@ def download_bc_perimeters(dest_dir: Path) -> None:
 # 2. NASA FIRMS Active-Fire Hotspots
 # ---------------------------------------------------------------------------
 
-def download_firms_hotspots(
-    dest_dir: Path,
-    years: list[int],
-    map_key: Optional[str] = None,
-) -> None:
+# FIRMS yearly country files: public, no MAP_KEY. Name → first year with data.
+FIRMS_YEARLY = "https://firms.modaps.eosdis.nasa.gov/data/country/{src}/{year}/{src}_{year}_Canada.csv"
+FIRMS_SOURCES = {"modis": 2000, "viirs-snpp": 2012, "viirs-jpss1": 2018}
+
+
+def download_firms_hotspots(dest_dir: Path, years: list[int]) -> None:
     """
-    Download VIIRS 375m active-fire hotspot archive for BC from NASA FIRMS.
-
-    NOTE: Suomi NPP (SNPP) VIIRS data products end November 1, 2026.
-    This function downloads from the best available satellite per year:
-      2012-2017: SNPP (VIIRS_SNPP_NRT_2)
-      2018-2021: SNPP + NOAA-20 (VIIRS_NOAA20_NRT_2)
-      2022+:     NOAA-20 + NOAA-21 (VIIRS_NOAA21_NRT_2) [SNPP retired]
-
-    Requires FIRMS MAP_KEY: https://firms.modaps.eosdis.nasa.gov/api/
+    Download the FIRMS active-fire archive for the BC bounding box: MODIS 1 km
+    (2000+) and VIIRS 375 m on Suomi NPP (2012+) and NOAA-20 (2018+).
+    Writes <source>_<year>_bc.csv per source and year.
     """
-    log.info("=== NASA FIRMS VIIRS 375m hotspots ===")
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    key = map_key or os.environ.get("FIRMS_MAP_KEY", "")
-    if not key:
-        log.warning(
-            "  FIRMS_MAP_KEY not set. Register at https://firms.modaps.eosdis.nasa.gov/api/ "
-            "and export FIRMS_MAP_KEY=your_key"
-        )
-        return
-
-    bb = BC_BBOX
-    area = f"{bb['lon_min']},{bb['lat_min']},{bb['lon_max']},{bb['lat_max']}"
-    base = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
-
-    # FIRMS area API: max 10 days per request.
-    # Source names for the area API (no _NRT_2 suffix — same names for archive):
-    #   VIIRS_SNPP_NRT   (2012–2026 Oct 31)
-    #   VIIRS_NOAA20_NRT (2018+)
-    #   VIIRS_NOAA21_NRT (2024+; NOAA-21 only has full data from Jan 2024 in archive)
-    # We request fire season (Apr–Oct) in 10-day chunks and merge.
-
     import pandas as pd
-    from datetime import date, timedelta
 
-    def sources_for_year(y: int) -> list[str]:
-        sources = ["VIIRS_SNPP_NRT"]
-        if y >= 2018: sources.append("VIIRS_NOAA20_NRT")
-        if y >= 2024: sources.append("VIIRS_NOAA21_NRT")
-        return sources
-
-    for year in years:
-        out = dest_dir / f"viirs_375m_bc_{year}.csv"
-        if out.exists():
-            log.info(f"  already exists: {out.name}")
+    log.info("=== NASA FIRMS active-fire archive ===")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    bb = BC_BBOX
+    for (src, first), year in itertools.product(FIRMS_SOURCES.items(), years):
+        out = dest_dir / f"{src}_{year}_bc.csv"
+        if year < first or out.exists():
             continue
-
-        # Fire season: Apr 1 – Oct 31, in 10-day windows
-        season_start = date(year, 4, 1)
-        season_end   = date(year, 10, 31)
-        all_dfs = []
-        chunk_date = season_start
-
-        while chunk_date <= season_end:
-            chunk_str = chunk_date.strftime("%Y-%m-%d")
-            days = min(5, (season_end - chunk_date).days + 1)  # FIRMS max is 5 days/request
-
-            for source in sources_for_year(year):
-                url = f"{base}/{key}/{source}/{area}/{days}/{chunk_str}"
-                try:
-                    r = requests.get(url, timeout=30)
-                    if r.ok and r.text.strip():
-                        lines = r.text.strip().split("\n")
-                        if len(lines) > 1:   # has data rows beyond header
-                            import io
-                            df = pd.read_csv(io.StringIO(r.text))
-                            df["satellite_source"] = source
-                            all_dfs.append(df)
-                except Exception as exc:
-                    log.warning(f"  FIRMS {source} {chunk_str} ({days}d): {exc}")
-
-            chunk_date += timedelta(days=days)
-
-        if all_dfs:
-            combined = pd.concat(all_dfs, ignore_index=True).drop_duplicates(
-                subset=["latitude", "longitude", "acq_date", "acq_time"]
-            )
-            combined.to_csv(out, index=False)
-            log.info(f"  Saved → {out} ({len(combined):,} hotspots)")
-        else:
-            log.warning(f"  No FIRMS data for {year}")
+        try:
+            df = pd.read_csv(FIRMS_YEARLY.format(src=src, year=year))
+        except Exception as exc:  # the current year is not published until it ends
+            log.warning(f"  FIRMS {src} {year}: {exc}")
+            continue
+        in_bbox = df.longitude.between(bb["lon_min"], bb["lon_max"])
+        df = df[in_bbox & df.latitude.between(bb["lat_min"], bb["lat_max"])]
+        df.to_csv(out, index=False)
+        log.info(f"  Saved → {out} ({len(df):,} detections)")
 
 
 # ---------------------------------------------------------------------------
@@ -815,9 +754,6 @@ def parse_args() -> argparse.Namespace:
         "--data-dir", default="data/raw", help="Root directory for raw data"
     )
     parser.add_argument(
-        "--firms-key", default=None, help="NASA FIRMS MAP_KEY (or set FIRMS_MAP_KEY env var)"
-    )
-    parser.add_argument(
         "--skip-era5", action="store_true", help="Skip ERA5 download (requires CDS API key)"
     )
     parser.add_argument(
@@ -846,7 +782,7 @@ def main() -> None:
     download_bc_perimeters(data_dir / "bc_perimeters")
 
     # 2. FIRMS hotspots
-    download_firms_hotspots(data_dir / "cwfis_hotspots", years, args.firms_key)
+    download_firms_hotspots(data_dir / "firms", years)
 
     # 3. ERA5 weather
     if not args.skip_era5:
