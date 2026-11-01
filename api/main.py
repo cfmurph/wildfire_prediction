@@ -9,13 +9,17 @@ FastAPI backend serving all four map views:
   /api/v1/predict/spread — next-day spread probability (heuristic → ML)
   /api/v1/ignition/causes — where fires typically start, by month and cause
 
-Deployed on Railway. All secrets are environment variables.
+Deployed on Railway, which also serves the static web app (apps/web/out) from /.
+All secrets are environment variables.
 """
 
 import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from api.routers import fires, weather, predict, ignition
 
@@ -25,6 +29,8 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+# Only local development needs CORS: in production the web app is served from this origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(","),
@@ -38,7 +44,7 @@ app.include_router(predict.router,   prefix="/api/v1/predict",   tags=["predict"
 app.include_router(ignition.router,  prefix="/api/v1/ignition",  tags=["ignition"])
 
 
-@app.get("/")
+@app.get("/api/v1")
 async def root():
     return {
         "name": "wildfire-prediction-api",
@@ -50,3 +56,9 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# The static web app, built by `npm run build` in apps/web. Mounted last so the API routes win.
+WEB_DIR = Path(os.environ.get("WEB_DIR", "apps/web/out"))
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

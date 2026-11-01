@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+from api.services.cache import ttl_cache
+
 log = logging.getLogger(__name__)
 
 # BC Wildfire Service public ArcGIS FeatureServer — current active fires.
@@ -36,6 +38,7 @@ BC_HISTORICAL_WFS = (
 BC_CURRENT_WFS = BC_HISTORICAL_WFS.replace("PROT_HISTORICAL_FIRE_POLYS_SP", "PROT_CURRENT_FIRE_POLYS_SP")
 
 
+@ttl_cache(300)
 async def get_active_fires() -> dict | None:
     """
     Fetch current active BC wildfires from the public ArcGIS FeatureServer.
@@ -82,6 +85,7 @@ async def get_active_fires() -> dict | None:
         return None
 
 
+@ttl_cache(24 * 3600)  # past seasons rarely change
 async def get_historical_perimeters(year: int) -> dict | None:
     """
     Fetch BC fire perimeters for a given year (up to 2000 features).

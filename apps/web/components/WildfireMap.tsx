@@ -9,15 +9,11 @@ import { FIRE_STATUSES, HISTORY_SIZES } from "@/lib/utils";
 import MapLegend, { HistoryLegend, HistorySummary } from "./MapLegend";
 import { activeFire, CurrentData } from "@/lib/fires";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL;
 
 // BC centre
 const BC_CENTER: [number, number] = [-125.5, 54.0];
 const BC_ZOOM = 5;
-
-// FIRMS WMS tile URL (public, no auth — visual fallback when no MAP_KEY)
-const FIRMS_WMS_TILES =
-  "https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=fires_viirs_snpp&STYLES=&FORMAT=image/png&TRANSPARENT=true&CRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}";
 
 type LayerEvent = "click" | "mouseenter" | "mouseleave";
 
@@ -118,7 +114,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     // Remove all layers first, then sources (a source can't be removed while layers use it)
     const layers = [
       "active-fires-glow", "active-fires",
-      "hotspots", "firms-wms",
+      "hotspots",
       "history-fill", "history-outline",
       "ignition-lightning", "ignition-human",
       "fwi-stations",
@@ -128,7 +124,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     layers.forEach(removeLayer);
     // Now safe to remove sources
     const sources = [
-      "active-fires", "hotspots", "firms-wms",
+      "active-fires", "hotspots",
       "history-fill", "ignition-lightning", "ignition-human", "fwi-stations",
     ];
     sources.forEach(removeSource);
@@ -161,10 +157,6 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
         source: "hotspots",
         paint: { "circle-radius": 2.5, "circle-color": "#fde68a", "circle-opacity": 0.8 },
       });
-    } else if (hotspots) {
-      // No FIRMS key: public WMS tiles instead of points
-      map.current.addSource("firms-wms", { type: "raster", tiles: [FIRMS_WMS_TILES], tileSize: 256 });
-      map.current.addLayer({ id: "firms-wms", type: "raster", source: "firms-wms", paint: { "raster-opacity": 0.8 } });
     }
 
     // Weather stations: squares would need a sprite, so hollow rings coloured by FWI class

@@ -29,7 +29,7 @@ def test_deploy_files_parse_and_the_image_can_see_requirements():
 
 
 def test_root_names_the_service(client):
-    response = client.get("/")
+    response = client.get("/api/v1")
     assert response.status_code == 200
     body = response.json()
     assert body["name"] == "wildfire-prediction-api"
@@ -305,3 +305,46 @@ def test_fire_starts_follow_the_season_and_never_invent_data(client, monkeypatch
         assert client.get("/api/v1/ignition/causes?month=7").status_code == 503
     finally:
         ignition._fire_starts.cache_clear()
+
+
+def test_serves_the_web_app_from_the_same_origin(monkeypatch, tmp_path):
+    import importlib
+
+    import api.main
+    from fastapi.testclient import TestClient
+
+    (tmp_path / "index.html").write_text("<title>BC Wildfire Map</title>")
+    monkeypatch.setenv("WEB_DIR", str(tmp_path))
+    try:
+        client = TestClient(importlib.reload(api.main).app)
+        assert "BC Wildfire Map" in client.get("/").text
+        assert client.get("/health").json() == {"status": "ok"}
+        assert client.get("/api/v1").json()["status"] == "ok"
+    finally:
+        monkeypatch.delenv("WEB_DIR")
+        importlib.reload(api.main)
+
+
+def test_large_responses_are_compressed(client):
+    response = client.get("/api/v1/ignition/causes?month=7", headers={"Accept-Encoding": "gzip"})
+    assert response.headers["content-encoding"] == "gzip"
+
+
+def test_feeds_are_cached_but_failures_are_retried():
+    import asyncio
+
+    from api.services.cache import ttl_cache
+
+    calls = []
+
+    @ttl_cache(300)
+    async def feed(ok: bool):
+        calls.append(ok)
+        return {"type": "FeatureCollection", "features": [{"id": 1}]} if ok else None
+
+    async def run():
+        for ok in (True, True, False, False):
+            await feed(ok)
+
+    asyncio.run(run())
+    assert calls == [True, False, False]

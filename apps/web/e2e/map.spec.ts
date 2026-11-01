@@ -36,7 +36,7 @@ test("map page switches views against a mocked API", async ({ page }) => {
   });
 
   await page.goto("/");
-  await expect(page.getByText("BC Wildfire Prediction")).toBeVisible();
+  await expect(page.getByText("BC Wildfire Map")).toBeVisible();
   await expect(page.getByRole("button", { name: /Current/ })).toBeVisible();
   await expect(page.getByText("1 active fire · 1,200 ha")).toBeVisible();
   await page.getByRole("button", { name: /K12345/ }).click();
