@@ -38,7 +38,6 @@ import rasterio.warp
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rasterio.transform import from_bounds
-from shapely.geometry import box
 
 from src.utils.config import CHANNELS, PATCH_SIZE, TARGET_RESOLUTION_M, VECTOR_CHANNEL_PAIRS
 
@@ -53,18 +52,20 @@ def firms_daily_masks(
     detections: pd.DataFrame,          # x, y in the patch CRS; date (Timestamp)
     dates: list[pd.Timestamp],
     transform: rasterio.transform.Affine,
-    perimeter: np.ndarray,             # (H, W) — rasterised final perimeter
+    perimeter: np.ndarray,             # (H, W) — rasterised final perimeters
 ) -> list[np.ndarray]:
     """
     Cumulative burn mask per day: a pixel has burned from the first day a detection
-    falls in it. Only pixels inside the fire's own final perimeter count, which drops
-    other fires and burning that is not a wildfire, such as slash piles.
+    falls in it. Only pixels inside a recorded fire perimeter count, which drops
+    burning that is not a wildfire, such as slash piles. Detections before the first
+    day count as already burned, so pass one season's detections only.
     """
     rows, cols = rasterio.transform.rowcol(transform, detections["x"], detections["y"])
     rows, cols = np.asarray(rows), np.asarray(cols)
     day = (detections["date"] - dates[0]).dt.days.to_numpy()
     H, W = perimeter.shape
-    keep = (rows >= 0) & (rows < H) & (cols >= 0) & (cols < W) & (day >= 0) & (day < len(dates))
+    day = np.maximum(day, 0)  # burned before the first day: already burned on it
+    keep = (rows >= 0) & (rows < H) & (cols >= 0) & (cols < W) & (day < len(dates))
     first = np.full((H, W), len(dates))
     np.minimum.at(first, (rows[keep], cols[keep]), day[keep])
     first[perimeter == 0] = len(dates)
@@ -93,7 +94,6 @@ CEMS_FWI_VARS = {
 YEARS_SINCE_FIRE_CAP = 40
 
 # Buffer around fire perimeter edge for patch sampling (metres)
-PATCH_BUFFER_M = 5_000   # 5 km beyond active perimeter
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ PATCH_BUFFER_M = 5_000   # 5 km beyond active perimeter
 
 @dataclass
 class PatchMeta:
-    patch_id: str          # "{fire_id}_{date}_{row}_{col}"
+    patch_id: str          # "{fire_id}_{date}", fire_id with _t{k} for tiled fires
     fire_id: str
     date: str              # "YYYY-MM-DD"
     year: int
@@ -167,65 +167,6 @@ def reproject_to_patch_grid(
             dst_nodata=fill_value,
         )
     return destination
-
-
-def burn_mask_from_perimeters(
-    perimeters_gdf: gpd.GeoDataFrame,
-    date: str,
-    transform: rasterio.transform.Affine,
-    shape: tuple[int, int],
-    crs: CRS,
-) -> np.ndarray:
-    """
-    Rasterise fire perimeter polygons for a given date into a binary mask.
-
-    Pixels that fall inside any fire perimeter active on `date` are set to 1.
-
-    Parameters
-    ----------
-    perimeters_gdf : GeoDataFrame
-        Must have columns: geometry, FIRE_YEAR, IGN_DATE, OUT_DATE (or similar).
-        Should already be filtered to the fire year of interest.
-    date : str
-        "YYYY-MM-DD" — the observation date.
-    transform : Affine
-        Target patch affine transform.
-    shape : tuple[int, int]
-        (H, W).
-    crs : CRS
-        Target CRS.
-
-    Returns
-    -------
-    np.ndarray, shape (H, W), dtype float32 — values 0.0 or 1.0
-    """
-    observation = pd.Timestamp(date)
-
-    # Filter to fires that were active on this date
-    active = perimeters_gdf[
-        (perimeters_gdf["IGN_DATE"] <= observation)
-        & (
-            perimeters_gdf["OUT_DATE"].isna()
-            | (perimeters_gdf["OUT_DATE"] >= observation)
-        )
-    ].to_crs(crs)
-
-    mask = np.zeros(shape, dtype=np.float32)
-    if active.empty:
-        return mask
-
-    shapes = [(geom, 1.0) for geom in active.geometry if geom is not None]
-    if not shapes:
-        return mask
-
-    rasterio.features.rasterize(
-        shapes=shapes,
-        out=mask,
-        transform=transform,
-        all_touched=False,
-        dtype=np.float32,
-    )
-    return mask
 
 
 # ---------------------------------------------------------------------------
@@ -496,23 +437,28 @@ class PatchExtractor:
 
         log.info(f"  {year}: {len(year_fires)} fires ≥ 10 ha")
 
+        # Every fire this season, any size: burning from a neighbouring fire is still burning
+        season = perimeters[perimeters["FIRE_YEAR"] == year].to_crs(OUTPUT_CRS)
+        detections = self.detections[self.detections["date"].dt.year == year]
         for fire_id, fire_group in year_fires.groupby("FIRE_ID", dropna=False):
             fire_id_str = str(fire_id) if fire_id else f"unk_{year}"
-            for meta in self._extract_fire_patches(perimeters, fire_group, fire_id_str, year):
-                meta_list.append(meta)
+            meta_list.extend(
+                self._extract_fire_patches(season, detections, fire_group, fire_id_str, year)
+            )
 
         return meta_list
 
     def _extract_fire_patches(
         self,
-        all_perimeters: gpd.GeoDataFrame,
+        season: gpd.GeoDataFrame,
+        detections: pd.DataFrame,
         fire_geom: gpd.GeoDataFrame,
         fire_id: str,
         year: int,
     ) -> Iterator[PatchMeta]:
         """
-        Yield patches for each day the fire was active.
-        For large fires (>100 km²) we tile with overlapping patches.
+        Yield patches for each day the fire grew. A fire wider than one patch is
+        covered by a grid of adjacent patches, each with its own id ({fire_id}_t{k}).
         """
         if "IGN_DATE" not in fire_geom.columns or fire_geom["IGN_DATE"].isna().all():
             return
@@ -527,34 +473,57 @@ class PatchExtractor:
             out_date = pd.Timestamp(f"{year}-11-30")
 
         date_range = list(pd.date_range(ign_date, out_date, freq="D"))
-        n_days = len(date_range)
-        if n_days < 2:
+        if len(date_range) < 2:
             return
 
-        # Build patch transform centred on fire centroid (constant across all days)
-        import pyproj
         fire_albers = fire_geom.to_crs(OUTPUT_CRS)
-        centroid = fire_albers.geometry.unary_union.centroid
-        cx, cy = centroid.x, centroid.y
-        xmin = cx - PATCH_EXTENT_M / 2
-        ymax = cy + PATCH_EXTENT_M / 2
-        transform = from_bounds(
-            xmin, ymax - PATCH_EXTENT_M, xmin + PATCH_EXTENT_M, ymax,
-            PATCH_SIZE, PATCH_SIZE,
-        )
-        shape = (PATCH_SIZE, PATCH_SIZE)
-        transformer = pyproj.Transformer.from_crs(OUTPUT_CRS.to_epsg(), 4326, always_xy=True)
-        lon, lat = transformer.transform(cx, cy)
+        west, south, east, north = fire_albers.total_bounds
+        nx = max(1, int(np.ceil((east - west) / PATCH_EXTENT_M)))
+        ny = max(1, int(np.ceil((north - south) / PATCH_EXTENT_M)))
+        # Grid centred on the fire's bounding box
+        x0 = (west + east - nx * PATCH_EXTENT_M) / 2
+        y0 = (south + north + ny * PATCH_EXTENT_M) / 2
+        for k, (r, c) in enumerate(np.ndindex(ny, nx)):
+            xmin, ymax = x0 + c * PATCH_EXTENT_M, y0 - r * PATCH_EXTENT_M
+            tile_id = fire_id if nx * ny == 1 else f"{fire_id}_t{k}"
+            yield from self._extract_tile_patches(
+                season, detections, fire_albers, tile_id, year, date_range, xmin, ymax
+            )
 
-        # Rasterise the fire's final perimeter: only detections inside it count
-        full_fire_mask = rasterio.features.rasterize(
+    def _extract_tile_patches(
+        self,
+        season: gpd.GeoDataFrame,
+        detections: pd.DataFrame,
+        fire_albers: gpd.GeoDataFrame,
+        tile_id: str,
+        year: int,
+        date_range: list[pd.Timestamp],
+        xmin: float,
+        ymax: float,
+    ) -> Iterator[PatchMeta]:
+        """Patches for one 64 km tile of a fire, one per day of new burning."""
+        import pyproj
+        shape = (PATCH_SIZE, PATCH_SIZE)
+        xmax, ymin = xmin + PATCH_EXTENT_M, ymax - PATCH_EXTENT_M
+        transform = from_bounds(xmin, ymin, xmax, ymax, *shape)
+        own = rasterio.features.rasterize(
             [(geom, 1.0) for geom in fire_albers.geometry if geom is not None],
             out_shape=shape, transform=transform, dtype=np.float32, fill=0.0,
         )
-        if full_fire_mask.sum() == 0:
-            return  # fire doesn't intersect patch area
+        if own.sum() == 0:
+            return  # this part of the grid misses the fire
 
-        daily_masks = firms_daily_masks(self.detections, date_range, transform, full_fire_mask)
+        # Detections count inside any of this season's perimeters, not just this fire's
+        nearby = season.cx[xmin:xmax, ymin:ymax]
+        burnable = rasterio.features.rasterize(
+            [(geom, 1.0) for geom in nearby.geometry if geom is not None],
+            out_shape=shape, transform=transform, dtype=np.float32, fill=0.0,
+        )
+        daily_masks = firms_daily_masks(detections, date_range, transform, np.maximum(own, burnable))
+
+        cx, cy = xmin + PATCH_EXTENT_M / 2, ymax - PATCH_EXTENT_M / 2
+        transformer = pyproj.Transformer.from_crs(OUTPUT_CRS.to_epsg(), 4326, always_xy=True)
+        lon, lat = transformer.transform(cx, cy)
 
         # Yield one patch per consecutive day pair (T → T+1)
         for i, date in enumerate(date_range[:-1]):
@@ -575,10 +544,10 @@ class PatchExtractor:
                     year=year,
                 )
             except Exception as exc:
-                log.warning(f"Skipping {fire_id} {date_str}: {exc}")
+                log.warning(f"Skipping {tile_id} {date_str}: {exc}")
                 continue
 
-            patch_id = f"{fire_id}_{date_str}"
+            patch_id = f"{tile_id}_{date_str}"
             np.savez_compressed(
                 self.output_dir / f"{patch_id}.npz",
                 X=X,              # (N_CH, 64, 64)
@@ -588,7 +557,7 @@ class PatchExtractor:
             )
 
             yield PatchMeta(
-                patch_id=patch_id, fire_id=fire_id, date=date_str, year=year,
+                patch_id=patch_id, fire_id=tile_id, date=date_str, year=year,
                 province=self.province,
                 centre_lon=round(lon, 5), centre_lat=round(lat, 5),
                 centre_x=round(cx, 1), centre_y=round(cy, 1),
@@ -762,7 +731,6 @@ class PatchExtractor:
         the target patch grid using rasterio's in-memory reprojection.
         """
         import tempfile
-        import xarray as xr
 
         # Write to a temporary in-memory raster then reproject
         lat_key = next((k for k in ["latitude", "lat"] if k in ds.coords), None)

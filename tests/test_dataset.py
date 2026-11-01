@@ -292,11 +292,41 @@ def test_firms_masks_grow_from_detections_inside_the_perimeter():
         ),
     })
     day0, day1, day2 = firms_daily_masks(detections, dates, transform, perimeter)
-    assert day0.sum() == 1 and day0[0, 0]
-    assert day1.sum() == 3 and day1[0, 1] and day1[1, 1]
+    # Burned before the first day counts as already burned on it
+    assert day0.sum() == 2 and day0[0, 0] and day0[3, 0]
+    assert day1.sum() == 4 and day1[0, 1] and day1[1, 1]
     assert (day2 == day1).all()
-    # Outside the perimeter (slash pile) and before the first day: never counted
-    assert not day2[0, 3] and not day2[3, 0]
+    # Outside the perimeter (slash pile): never counted
+    assert not day2[0, 3]
+
+
+def test_wide_fires_are_tiled_and_neighbouring_fires_count_as_burned(tmp_path):
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import box
+
+    from src.data.assemble import OUTPUT_CRS, PATCH_EXTENT_M, PatchExtractor
+
+    class Extractor(PatchExtractor):
+        def _build_patch_channels(self, prev_mask, **_):
+            return prev_mask[None]
+
+    # A fire 1.5 patches wide and a small neighbour 5 km north of it, inside the same tile
+    fire = box(0, 0, 1.5 * PATCH_EXTENT_M, 10_000)
+    neighbour = box(10_000, 15_000, 12_000, 17_000)
+    season = gpd.GeoDataFrame({"FIRE_ID": ["F", "N"]}, geometry=[fire, neighbour], crs=OUTPUT_CRS)
+    fire_rows = season.iloc[[0]].assign(
+        IGN_DATE=pd.Timestamp("2023-07-01"), OUT_DATE=pd.Timestamp("2023-07-03")
+    )
+    detections = pd.DataFrame({
+        "x": [500, 90_500, 11_000],
+        "y": [500, 500, 16_000],
+        "date": pd.to_datetime(["2023-07-01", "2023-07-02", "2023-07-02"]),
+    })
+    metas = list(Extractor(tmp_path, tmp_path)._extract_fire_patches(season, detections, fire_rows, "F", 2023))
+    assert sorted(m.patch_id for m in metas) == ["F_t0_2023-07-01", "F_t1_2023-07-01"]
+    left = np.load(tmp_path / "F_t0_2023-07-01.npz")["y"]
+    assert left.sum() == 2  # the fire's own detection and the neighbour's
 
 
 def test_ndvi_uses_the_latest_composite_that_ended_by_the_patch_date(tmp_path):
