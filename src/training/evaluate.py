@@ -17,9 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from src.utils.metrics import compute_metrics, compare_models
-from src.utils.visualization import spatial_confusion_map, plot_pr_curves, plot_calibration_curve
-from src.utils.metrics import precision_recall_data, calibration_data
+from src.utils.metrics import compute_metrics
 
 log = logging.getLogger(__name__)
 
@@ -46,8 +44,9 @@ def evaluate_on_manifest(
     metrics : dict of aggregate metrics
     per_patch : list of dicts with per-patch metrics (for domain-shift analysis)
     """
-    from src.data.dataset import WildfireDataset, WildfireSequenceDataset, ChannelStats
     from torch.utils.data import DataLoader
+
+    from src.data.dataset import WildfireDataset, WildfireSequenceDataset
 
     DatasetClass = WildfireDataset if seq_len == 1 else WildfireSequenceDataset
     kwargs = dict(
@@ -191,7 +190,7 @@ def generate_evaluation_report(
     )
 
     # Temporal breakdown
-    year_report = temporal_generalization_report(
+    temporal_generalization_report(
         per_patch,
         output_path=output_dir / f"{model_name}_{manifest_path.stem}_by_year.json",
     )

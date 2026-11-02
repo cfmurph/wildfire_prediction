@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Query
+
 from api.services import predictor
 
 router = APIRouter()

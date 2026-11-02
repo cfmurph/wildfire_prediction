@@ -1,7 +1,8 @@
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
-from api.services import firms, bc_fires
+
+from api.services import bc_fires, firms
 
 router = APIRouter()
 

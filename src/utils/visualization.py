@@ -14,12 +14,14 @@ Produces:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
 
+if TYPE_CHECKING:
+    import folium
 
 # ---------------------------------------------------------------------------
 # Colour scheme for spatial confusion maps
@@ -214,7 +216,7 @@ def plot_feature_importance(
     values = [v for _, v in items]
 
     fig, ax = plt.subplots(figsize=(8, 0.5 * top_n + 1))
-    bars = ax.barh(names[::-1], values[::-1])
+    ax.barh(names[::-1], values[::-1])
     ax.set_xlabel("Mean Decrease in Impurity")
     ax.set_title(title)
     ax.grid(True, axis="x", alpha=0.3)

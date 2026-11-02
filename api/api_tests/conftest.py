@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
+
 from api.main import app
 from api.services.cache import clear_all
-from fastapi.testclient import TestClient
 
 
 def _blocked(*_args, **_kwargs):

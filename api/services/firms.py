@@ -10,9 +10,9 @@ BC bounding box: lon -139 to -114, lat 48 to 60
 from __future__ import annotations
 
 import io
+import logging
 import math
 import os
-import logging
 
 import httpx
 import pandas as pd

@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from api.routers import fires, weather, predict, ignition
+from api.routers import fires, ignition, predict, weather
 
 app = FastAPI(
     title="Wildfire Prediction API",

@@ -22,7 +22,6 @@ import logging
 import random
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 import hydra
 import mlflow
@@ -34,13 +33,13 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from src.data.dataset import make_dataloaders
-from src.data.transforms import build_train_transforms, build_eval_transforms
+from src.data.transforms import build_eval_transforms, build_train_transforms
+from src.models.convlstm import build_convlstm
 from src.models.losses import CombinedLoss
 from src.models.unet import build_unet
-from src.models.convlstm import build_convlstm
 from src.utils.config import CHANNELS
 from src.utils.metrics import compute_metrics, compute_spread_metrics
-from src.utils.visualization import plot_training_curves, spatial_confusion_map
+from src.utils.visualization import plot_training_curves
 
 log = logging.getLogger(__name__)
 

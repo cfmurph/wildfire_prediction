@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import logging
-import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path

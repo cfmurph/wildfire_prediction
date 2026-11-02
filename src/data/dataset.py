@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -295,7 +295,6 @@ class WildfireSequenceDataset(Dataset):
 
         # Apply spatial augmentation consistently across all frames
         if self.transform is not None:
-            augmented_frames = []
             # Use first frame + target to sample transform parameters
             # (we apply the same spatial transform to all frames)
             X_seq, y = _apply_sequence_transform(self.transform, X_seq, y)

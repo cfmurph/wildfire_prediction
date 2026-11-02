@@ -6,8 +6,8 @@ Verifies metric implementations against known values and edge cases.
 
 import numpy as np
 import pytest
-from src.utils.metrics import compute_metrics, compute_spread_metrics, compare_models, calibration_data
 
+from src.utils.metrics import calibration_data, compare_models, compute_metrics, compute_spread_metrics
 
 # ---------------------------------------------------------------------------
 # Fixtures

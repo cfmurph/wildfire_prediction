@@ -17,11 +17,9 @@ from __future__ import annotations
 import random
 from typing import Callable
 
-import numpy as np
 import torch
 
 from src.utils.config import CHANNELS, VECTOR_CHANNEL_PAIRS
-
 
 # Binary mask channels are excluded from noise
 _MASK_CHANNEL_INDICES = {CHANNELS.index("PrevFireMask")}

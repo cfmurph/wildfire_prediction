@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+
 from api.services.predictor import spread_forecast
 
 REPO = Path(__file__).resolve().parents[2]
@@ -310,8 +311,9 @@ def test_fire_starts_follow_the_season_and_never_invent_data(client, monkeypatch
 def test_serves_the_web_app_from_the_same_origin(monkeypatch, tmp_path):
     import importlib
 
-    import api.main
     from fastapi.testclient import TestClient
+
+    import api.main
 
     (tmp_path / "index.html").write_text("<title>BC Wildfire Map</title>")
     monkeypatch.setenv("WEB_DIR", str(tmp_path))

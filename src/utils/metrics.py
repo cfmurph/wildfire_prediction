@@ -23,8 +23,8 @@ from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
     f1_score,
-    roc_auc_score,
     precision_recall_curve,
+    roc_auc_score,
     roc_curve,
 )
 
@@ -116,7 +116,9 @@ def compute_spread_metrics(
     return {
         "persistence_auc_pr": float(average_precision_score(y_true.ravel(), burned.ravel())),
         "new_burn_auc_pr": float(average_precision_score(y_new, y_prob[new])) if has_both else float("nan"),
-        "new_burn_distance_auc_pr": float(average_precision_score(y_new, dist_score[new])) if has_both else float("nan"),
+        "new_burn_distance_auc_pr": (
+            float(average_precision_score(y_new, dist_score[new])) if has_both else float("nan")
+        ),
         "new_burn_rate": float(y_new.mean()) if y_new.size else float("nan"),
     }
 
