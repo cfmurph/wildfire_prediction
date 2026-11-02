@@ -62,3 +62,41 @@ def test_one_epoch_trains_and_evaluates(synthetic_dataset):
     assert np.isfinite(loss)
     assert 0.0 <= metrics["auc_pr"] <= 1.0
     assert "new_burn_auc_pr" in metrics
+
+
+def test_new_burn_loss_ignores_already_burned_pixels():
+    from src.models.losses import CombinedLoss
+
+    criterion = CombinedLoss(pos_weight=5.0)
+    logits = torch.randn(2, 1, 8, 8)
+    targets = (torch.rand(2, 8, 8) > 0.7).float()
+    mask = torch.ones(2, 8, 8)
+    mask[:, :4] = 0  # top half already burned
+    changed = logits.clone()
+    changed[:, :, :4] = 10.0  # anything there must not matter
+    assert torch.allclose(criterion(logits, targets, mask), criterion(changed, targets, mask))
+    assert not torch.allclose(criterion(logits, targets), criterion(changed, targets))
+
+
+@pytest.mark.parametrize("loss_on", ["all", "new_burn"])
+def test_one_epoch_trains_with_either_loss(synthetic_dataset, loss_on):
+    from src.data.dataset import WildfireDataset
+    from src.models.losses import CombinedLoss
+    from src.models.unet import build_unet
+    from src.training.train import evaluate_epoch, train_one_epoch
+
+    ds = synthetic_dataset
+    dataset = WildfireDataset(
+        ds["splits_dir"] / "train.json", ds["patches_dir"], ds["stats_dir"] / "channel_stats.json"
+    )
+    _, pos_weight = dataset.pixel_class_weights(new_burn_only=loss_on == "new_burn")
+    loader = torch.utils.data.DataLoader(dataset, batch_size=4)
+    model = build_unet(in_channels=N_CHANNELS, base_filters=8, depth=2)
+    criterion = CombinedLoss(pos_weight=pos_weight)
+    optimizer = torch.optim.AdamW(model.parameters())
+    new_burn_only = loss_on == "new_burn"
+    cpu = torch.device("cpu")
+    assert np.isfinite(train_one_epoch(model, loader, optimizer, criterion, cpu, new_burn_only=new_burn_only))
+    loss, metrics = evaluate_epoch(model, loader, criterion, cpu, new_burn_only)
+    assert np.isfinite(loss) and 0.0 <= metrics["new_burn_auc_pr"] <= 1.0
+

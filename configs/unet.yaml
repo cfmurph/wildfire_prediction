@@ -46,6 +46,8 @@ training:
   scheduler: cosine          # cosine annealing
   dice_weight: 0.5           # loss = dice_weight*Dice + (1-dice_weight)*BCE
   early_stopping_patience: 8
+  early_stopping_window: 1      # stop/select on the mean of this many val scores
+  loss_on: all                # all | new_burn (only pixels unburned on the input day)
   num_workers: 4
   seed: 42
 

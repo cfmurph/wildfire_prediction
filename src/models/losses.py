@@ -40,16 +40,21 @@ class DiceLoss(nn.Module):
         super().__init__()
         self.smooth = smooth
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         Parameters
         ----------
         logits : Tensor, shape (B, 1, H, W) or (B, H, W) — raw model outputs
         targets : Tensor, shape (B, H, W) — binary {0, 1}
+        mask : Tensor, shape (B, H, W), optional — 1 for pixels that count
         """
         probs = torch.sigmoid(logits)
         if probs.dim() == 4:
             probs = probs.squeeze(1)    # (B, H, W)
+        if mask is not None:
+            probs, targets = probs * mask, targets * mask
 
         # Flatten spatial dims
         probs_flat = probs.reshape(probs.shape[0], -1)
@@ -92,12 +97,16 @@ class CombinedLoss(nn.Module):
             "pos_weight_tensor", torch.tensor([pos_weight], dtype=torch.float32)
         )
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         Parameters
         ----------
         logits : Tensor, shape (B, 1, H, W) or (B, H, W)
         targets : Tensor, shape (B, H, W), float32, values in {0, 1}
+        mask : Tensor, shape (B, H, W), optional — 1 for pixels that count, e.g. those
+            not yet burned, so the loss matches the new-burn score
         """
         if logits.dim() == 4:
             logits_bce = logits.squeeze(1)
@@ -108,7 +117,9 @@ class CombinedLoss(nn.Module):
             logits_bce,
             targets,
             pos_weight=self.pos_weight_tensor.to(logits.device),
+            reduction="none",
         )
-        dice = self.dice_loss(logits, targets)
+        bce = bce.mean() if mask is None else (bce * mask).sum() / mask.sum().clamp(min=1)
+        dice = self.dice_loss(logits, targets, mask)
 
         return self.dice_weight * dice + (1.0 - self.dice_weight) * bce

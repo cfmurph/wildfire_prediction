@@ -21,6 +21,7 @@ import datetime
 import logging
 import random
 import subprocess
+from collections import deque
 from pathlib import Path
 
 import hydra
@@ -84,6 +85,15 @@ def build_model(cfg: DictConfig) -> nn.Module:
 # One epoch
 # ---------------------------------------------------------------------------
 
+def unburned_mask(X: torch.Tensor, stats) -> torch.Tensor:
+    """Pixels not burned on the input day, from the (normalised) PrevFireMask channel."""
+    k = CHANNELS.index("PrevFireMask")
+    # PrevFireMask is 0/1 before z-scoring, so its normalised midpoint splits burned from unburned
+    burned_above = (0.5 - stats.mean[k]) / stats.std[k]
+    prev = X[:, -1, k] if X.dim() == 5 else X[:, k]   # last frame for sequences
+    return (prev <= burned_above).float()
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
@@ -91,20 +101,22 @@ def train_one_epoch(
     criterion: nn.Module,
     device: torch.device,
     seq_mode: bool = False,
+    new_burn_only: bool = False,
 ) -> float:
-    """Returns mean training loss."""
+    """Returns mean training loss. With new_burn_only, already-burned pixels are left out of the loss."""
     model.train()
     total_loss = 0.0
     n_batches = 0
 
     for batch in loader:
         X, y = batch
+        mask = unburned_mask(X, loader.dataset.stats).to(device) if new_burn_only else None
         X = X.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
         logits = model(X)                          # (B, 1, H, W)
-        loss = criterion(logits, y)
+        loss = criterion(logits, y, mask)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
@@ -121,6 +133,7 @@ def evaluate_epoch(
     loader: torch.utils.data.DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    new_burn_only: bool = False,
 ) -> tuple[float, dict[str, float]]:
     """Returns (mean_loss, metrics_dict)."""
     model.eval()
@@ -130,25 +143,21 @@ def evaluate_epoch(
     all_targets: list[np.ndarray] = []
     all_prev: list[np.ndarray] = []
 
-    # PrevFireMask is 0/1 before z-scoring, so its normalised midpoint splits burned from unburned
-    k = CHANNELS.index("PrevFireMask")
-    stats = loader.dataset.stats
-    burned_above = (0.5 - stats.mean[k]) / stats.std[k]
-
     for batch in loader:
         X, y = batch
-        prev = X[:, -1, k] if X.dim() == 5 else X[:, k]   # last frame for sequences
-        all_prev.append((prev > burned_above).numpy())
+        unburned = unburned_mask(X, loader.dataset.stats)
+        all_prev.append((unburned == 0).numpy())
         X = X.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
 
         logits = model(X)
-        loss = criterion(logits, y)
+        loss = criterion(logits, y, unburned.to(device) if new_burn_only else None)
         total_loss += loss.item()
         n_batches += 1
 
         probs = torch.sigmoid(logits).squeeze(1).cpu().numpy()
-        all_probs.append(probs)
+        # Already-burned pixels stay burned; a new-burn-only model was never trained on them
+        all_probs.append(np.maximum(probs, all_prev[-1]))
         all_targets.append(y.cpu().numpy())
 
     probs_np = np.concatenate(all_probs)
@@ -207,8 +216,12 @@ def main(cfg: DictConfig) -> None:
     # ---- Model + loss ----
     model = build_model(cfg).to(device)
 
-    # Estimate pos_weight from training split metadata
-    _, pos_weight = loaders["train"].dataset.pixel_class_weights() if hasattr(
+    # "all": every pixel counts (the day-T fire mask dominates); "new_burn": only pixels
+    # unburned on the input day, which is what the new-burn score measures
+    new_burn_only = cfg.training.get("loss_on", "all") == "new_burn"
+
+    # Estimate pos_weight from the training split
+    _, pos_weight = loaders["train"].dataset.pixel_class_weights(new_burn_only) if hasattr(
         loaders["train"].dataset, "pixel_class_weights"
     ) else (1.0, 10.0)
 
@@ -262,20 +275,24 @@ def main(cfg: DictConfig) -> None:
             "lr": cfg.training.learning_rate,
             "dice_weight": cfg.training.dice_weight,
             "pos_weight": round(pos_weight, 2),
+            "loss_on": cfg.training.get("loss_on", "all"),
+            "early_stopping_window": cfg.training.get("early_stopping_window", 1),
             "device": str(device),
             "git_sha": git_sha,
             "seed": seed,
         })
 
+        # Stop and select on the mean of the last few val scores: one epoch's score is noisy
+        recent = deque(maxlen=cfg.training.get("early_stopping_window", 1))
         for epoch in range(1, cfg.training.epochs + 1):
             train_loss = train_one_epoch(
-                model, loaders["train"], optimizer, criterion, device, seq_mode
+                model, loaders["train"], optimizer, criterion, device, seq_mode, new_burn_only
             )
             scheduler.step()
 
             if "val" in loaders:
                 val_loss, val_metrics = evaluate_epoch(
-                    model, loaders["val"], criterion, device
+                    model, loaders["val"], criterion, device, new_burn_only
                 )
                 # All-pixel AUC-PR rewards copying the day-T mask; select on new burn
                 val_auc_pr = float(np.nan_to_num(val_metrics["new_burn_auc_pr"]))
@@ -305,11 +322,13 @@ def main(cfg: DictConfig) -> None:
             )
 
             # Early stopping + best model checkpoint
-            if val_auc_pr > best_val_auc_pr:
-                best_val_auc_pr = val_auc_pr
+            recent.append(val_auc_pr)
+            score = float(np.mean(recent))
+            if score > best_val_auc_pr:
+                best_val_auc_pr = score
                 patience_counter = 0
                 torch.save(model.state_dict(), best_ckpt)
-                log.info(f"  ✓ New best val new-burn AUC-PR={val_auc_pr:.4f} — checkpoint saved")
+                log.info(f"  ✓ New best val new-burn AUC-PR={score:.4f} (mean of {len(recent)}) — checkpoint saved")
             else:
                 patience_counter += 1
                 if patience_counter >= cfg.training.early_stopping_patience:
@@ -322,7 +341,7 @@ def main(cfg: DictConfig) -> None:
 
         if "test" in loaders:
             _, test_metrics = evaluate_epoch(
-                model, loaders["test"], criterion, device
+                model, loaders["test"], criterion, device, new_burn_only
             )
             mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
             log.info(
