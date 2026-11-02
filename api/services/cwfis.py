@@ -92,8 +92,7 @@ async def nearest_station(lat: float, lon: float, max_km: float = 100.0) -> Opti
 
 
 def _fwi_class(fwi: float) -> str:
-    if fwi < 5:   return "Low"
-    if fwi < 12:  return "Moderate"
-    if fwi < 20:  return "High"
-    if fwi < 30:  return "Very High"
+    for upper, name in ((5, "Low"), (12, "Moderate"), (20, "High"), (30, "Very High")):
+        if fwi < upper:
+            return name
     return "Extreme"

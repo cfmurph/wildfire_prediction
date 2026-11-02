@@ -18,15 +18,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Optional
 
+import joblib
 import mlflow
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import average_precision_score, roc_auc_score
-import joblib
 
 from src.utils.config import CHANNELS, N_CHANNELS, PATCH_SIZE
 
@@ -202,7 +201,8 @@ def train_and_evaluate(
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     mlflow.set_experiment(mlflow_experiment)
 
-    import subprocess, datetime
+    import datetime
+    import subprocess
     try:
         git_sha = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], text=True

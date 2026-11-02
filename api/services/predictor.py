@@ -19,9 +19,8 @@ Phase 2: load trained model artifact from MLflow and run inference.
 
 from __future__ import annotations
 
-import math
 import logging
-from typing import Optional
+import math
 
 log = logging.getLogger(__name__)
 

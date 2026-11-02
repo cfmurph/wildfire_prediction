@@ -6,14 +6,12 @@ Verifies shapes, dtypes, NaN handling, normalisation, and augmentations.
 """
 
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
 from src.utils.config import CHANNELS, N_CHANNELS, PATCH_SIZE
-
 
 # ---------------------------------------------------------------------------
 # WildfireDataset tests
@@ -99,8 +97,9 @@ class TestWildfireDataset:
             "Normalisation does not seem to have been applied"
 
     def test_dataloader_batching(self, synthetic_dataset):
-        from src.data.dataset import WildfireDataset
         from torch.utils.data import DataLoader
+
+        from src.data.dataset import WildfireDataset
         ds = synthetic_dataset
         dataset = WildfireDataset(
             manifest_path=ds["splits_dir"] / "train.json",
@@ -152,7 +151,7 @@ class TestWildfireSequenceDataset:
         assert [[r["date"] for r in seq] for seq, _ in ds.sequences] == [["2023-07-01", "2023-07-02", "2023-07-03"]]
 
     def test_seq_len_1_matches_single_frame(self, synthetic_dataset):
-        from src.data.dataset import WildfireSequenceDataset, WildfireDataset
+        from src.data.dataset import WildfireSequenceDataset
         ds = synthetic_dataset
         seq_ds = WildfireSequenceDataset(
             manifest_path=ds["splits_dir"] / "train.json",
@@ -213,6 +212,7 @@ class TestTransforms:
     def test_wind_still_points_from_fire_to_new_burn(self, seed):
         """After any flip/rotation, the wind vector must point from the fire to where it spread."""
         import random
+
         from src.data.transforms import build_train_transforms
         from src.utils.config import CHANNELS
         u, v = CHANNELS.index("wind_u"), CHANNELS.index("wind_v")

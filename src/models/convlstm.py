@@ -20,8 +20,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from src.models.unet import ConvBlock, DecoderBlock
-
+from src.models.unet import ConvBlock
 
 # ---------------------------------------------------------------------------
 # ConvLSTM Cell
