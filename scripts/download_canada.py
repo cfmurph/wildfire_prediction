@@ -467,72 +467,35 @@ def download_cdem(dest_dir: Path) -> None:
 # 7. Canada Land Cover 2020
 # ---------------------------------------------------------------------------
 
+LANDCOVER_TIF = (
+    "https://datacube-prod-data-public.s3.ca-central-1.amazonaws.com/"
+    "store/land/landcover/landcover-2020-classification.tif"
+)
+
+
 def download_landcover(dest_dir: Path) -> None:
     """
-    Download the Canada Land Cover 2020 product from NRCan.
+    Download the Canada Land Cover 2020 product from NRCan (30 m GeoTIFF, about 2 GB).
 
     Source: https://open.canada.ca/data/en/dataset/4e615eae-b90c-420b-adee-2ca35896caf6
-    Resolution: 30 m, GeoTIFF
     License: Open Government Licence – Canada
     """
     log.info("=== Canada Land Cover 2020 ===")
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    out = dest_dir / "canada_landcover_2020_30m.zip"
-    extracted = dest_dir / "canada_lc_2020"
-
-    if extracted.exists():
-        log.info("  already extracted.")
+    # The file name assemble.py reads
+    tif = dest_dir / "landcover-2020-classification.tif"
+    if tif.exists():
+        log.info(f"  already exists: {tif.name}")
         return
-
-    # URLs sourced from NRCan Open Data CKAN API (package ee1580ab-a23d-4f86-a09b-79763677eb47)
-    urls_to_try = [
-        # Primary: NRCan S3 COG (correct path confirmed via CKAN API 2025-09-27)
-        "https://datacube-prod-data-public.s3.ca-central-1.amazonaws.com/store/land/landcover/landcover-2020-classification.tif",
-        # FTP fallbacks
-        "https://ftp.maps.canada.ca/pub/nrcan_rncan/Land-cover_Couverture-du-sol/canada-landcover_canada-couverture-du-sol/CanadaLandcover2020.zip",
-        "https://ftp.maps.canada.ca/pub/nrcan_rncan/Land-cover_Couverture-du-sol/canada-landcover_canada-couverture-du-sol/landcover-2020-classification.zip",
-    ]
-
-    for url in urls_to_try:
-        try:
-            if "stac" in url or "services.geo.ca" in url:
-                # STAC item — fetch metadata to get asset URL
-                resp = requests.get(url, timeout=15)
-                resp.raise_for_status()
-                item = resp.json()
-                asset_url = (
-                    item.get("assets", {})
-                    .get("data", item.get("assets", {}).get("image", {}))
-                    .get("href", "")
-                )
-                if asset_url:
-                    tif_out = dest_dir / "landcover-2020-classification.tif"
-                    _download_file(asset_url, tif_out, "Canada Landcover 2020 (STAC COG)")
-                    extracted.mkdir(exist_ok=True)
-                    log.info(f"  Saved → {tif_out}")
-                    return
-            elif url.endswith(".zip"):
-                _download_file(url, out, "Canada Landcover 2020")
-                with zipfile.ZipFile(out, "r") as z:
-                    z.extractall(extracted)
-                out.unlink(missing_ok=True)
-                log.info(f"  Extracted → {extracted}")
-                return
-        except Exception as exc:
-            log.warning(f"  URL failed: {exc}")
-
-    log.error("  All Landcover download attempts failed.")
-    log.info(
-        "\n  Manual download (choose one):\n"
-        "  Option A — NRCan Open Data catalogue:\n"
-        "    https://open.canada.ca/data/en/dataset/4e615eae-b90c-420b-adee-2ca35896caf6\n"
-        "  Option B — Direct FTP browser:\n"
-        "    https://ftp.maps.canada.ca/pub/nrcan_rncan/Land-cover_Couverture-du-sol/\n"
-        "  Place any downloaded GeoTIFF in: data/raw/landcover/\n"
-        "\n  NOTE: Training can proceed without landcover (channel will be zero-filled).\n"
-        "        Add it later to improve model accuracy."
-    )
+    try:
+        _download_file(LANDCOVER_TIF, tif, "Canada Land Cover 2020")
+        log.info(f"  Saved → {tif}")
+    except Exception as exc:
+        tif.unlink(missing_ok=True)  # don't leave a partial file that looks complete
+        log.error(
+            f"  Land cover download failed: {exc}\n"
+            "  Download it from https://open.canada.ca/data/en/dataset/4e615eae-b90c-420b-adee-2ca35896caf6\n"
+            f"  and save it as {tif}. Without it the landcover channel is zero-filled."
+        )
 
 
 # ---------------------------------------------------------------------------
