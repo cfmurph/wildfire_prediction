@@ -44,7 +44,8 @@ Daily weather uses the local (PDT) day: temperature max/min, minimum relative hu
 Primary metric: **new-burn AUC-PR**, scored only on pixels not burned at day T. All-pixel AUC-PR rewards copying the day-T fire mask (persistence alone scores about 0.96), so every model is compared against persistence and a distance-to-fire baseline:
 
 ```bash
-python scripts/evaluate_checkpoints.py --split test
+python scripts/evaluate_checkpoints.py --split test --unet seed42.pt seed1.pt seed2.pt   # one row per season
+python scripts/channel_importance.py --checkpoint seed42.pt   # which inputs the model relies on
 ```
 
 Current U-Net result on real (VIIRS) targets, test season 2023, seeds 42 / 1 / 2: **0.061 ± 0.003** new-burn AUC-PR (0.058 / 0.064 / 0.061), against 0.041 for the distance baseline and 0.003 for random guessing (0.33% of unburned pixels burn the next day). Validation (2021–22): 0.097 against 0.049. The model beats both baselines but only modestly: most of what it gets right is that fires grow at their edges. Data: 16,698 patches from about 1,000 fires; a typical patch gains 4 burned km² out of 4,096.
