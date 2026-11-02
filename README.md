@@ -24,12 +24,12 @@ Assembled from open Canadian government and scientific sources:
 | Terrain | SRTM | 90 m |
 | Land cover | NRCan Canada LC 2020 | 30 m |
 
-Patches: **64 × 64 pixels at 1 km/pixel** centered on active fire perimeters.
+Patches: **64 × 64 pixels at 1 km/pixel**, one per fire-day with new burning. Fires wider than 64 km are covered by a grid of adjacent patches.
 Coverage: **BC fire seasons 2012–2023**.
 
 Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. NDVI comes from MODIS 16-day composites: run `scripts/prepare_ndvi.py` after downloading (it needs `pip install -e ".[data]"` for HDF4). Each patch uses the latest composite that ended by its date, so the input cannot show the next day's burn. `years_since_fire` gives the years since each pixel last burned, from BC fire perimeters back to 1972 (earlier seasons only, capped at 40).
 
-**Targets come from satellite detections.** Perimeters give only a fire's final extent, so `firms_daily_masks` marks a pixel burned from the first day a NASA FIRMS VIIRS detection (Suomi NPP and NOAA-20, 375 m) falls in it. Only detections inside the fire's own final perimeter count, which drops other fires and non-wildfire burning such as slash piles. Cloud and smoke can hide burning, so some burned pixels are never detected.
+**Targets come from satellite detections.** Perimeters give only a fire's final extent, so `firms_daily_masks` marks a pixel burned from the first day a NASA FIRMS VIIRS detection (Suomi NPP and NOAA-20, 375 m) falls in it. Only connected clusters of detections that reach into one of the season's mapped perimeters count: that keeps growth past a perimeter mapped before the fire stopped, and neighbouring fires in the same patch, while dropping isolated burning such as slash piles. Cloud and smoke can hide burning, so some burned pixels are never detected.
 
 ---
 
@@ -41,13 +41,15 @@ Daily weather uses the local (PDT) day: temperature max/min, minimum relative hu
 | U-Net CNN | Spatial encoder-decoder | ≥ 5pp AUC-PR over RF |
 | ConvLSTM | Spatiotemporal (T=5 days history) | ≥ 5pp AUC-PR over U-Net |
 
-Primary metric: **new-burn AUC-PR**, scored only on pixels not burned at day T. All-pixel AUC-PR rewards copying the day-T fire mask (persistence alone scores about 0.85), so every model is compared against persistence and a distance-to-fire baseline:
+Primary metric: **new-burn AUC-PR**, scored only on pixels not burned at day T. All-pixel AUC-PR rewards copying the day-T fire mask (persistence alone scores about 0.96), so every model is compared against persistence and a distance-to-fire baseline:
 
 ```bash
 python scripts/evaluate_checkpoints.py --split test
 ```
 
-Current U-Net result (test, seeds 42 / 1 / 2): **0.523 ± 0.016** new-burn AUC-PR (0.521 / 0.508 / 0.540) against 0.183 for the distance baseline. That is up from 0.447 ± 0.064 before terrain and wind were encoded as rotation-aware vectors and border pixels were filled; the September data, where most weather channels were empty, scored 0.559 ± 0.012. Two channels are still empty in the training split (NDVI and the Burn-P3 burn probability), so the model effectively sees 17 of 19.
+Current U-Net result on real (VIIRS) targets, test season 2023, seeds 42 / 1 / 2: **0.061 ± 0.003** new-burn AUC-PR (0.058 / 0.064 / 0.061), against 0.041 for the distance baseline and 0.003 for random guessing (0.33% of unburned pixels burn the next day). Validation (2021–22): 0.097 against 0.049. The model beats both baselines but only modestly: most of what it gets right is that fires grow at their edges. Data: 16,698 patches from about 1,000 fires; a typical patch gains 4 burned km² out of 4,096.
+
+Earlier results (0.45–0.56) were on synthetic targets grown from final perimeters by an FWI- and wind-driven rule. They measured how well a model learns that rule and are not comparable.
 
 ---
 
