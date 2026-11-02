@@ -39,7 +39,7 @@ def make_synthetic_manifest(
     """Return a list of manifest records for synthetic patches."""
     records = []
     for i, pid in enumerate(patch_ids):
-        year = base_year + (i % 3)
+        year = base_year + (i // 5) % 3  # one year per fire, so its days are consecutive
         records.append({
             "patch_id": pid,
             "fire_id": f"fire_{i // 5}",
