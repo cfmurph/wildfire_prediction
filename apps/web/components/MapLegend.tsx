@@ -1,4 +1,4 @@
-import { FIRE_STATUSES, HISTORY_SIZES } from "@/lib/utils";
+import { FIRE_STATUSES, HISTORY_SIZES, SPREAD_COLOR } from "@/lib/utils";
 
 function Dot({ color, ring = false, size = 10 }: { color: string; ring?: boolean; size?: number }) {
   return (
@@ -9,10 +9,14 @@ function Dot({ color, ring = false, size = 10 }: { color: string; ring?: boolean
   );
 }
 
+function Swatch({ color }: { color: string }) {
+  return <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />;
+}
+
 const BOX = "absolute top-3 left-3 bg-gray-900/90 border border-gray-700 rounded-lg p-3 text-xs text-gray-300 space-y-1.5 pointer-events-none";
 
-/** Key for the Current map symbols. */
-export default function MapLegend() {
+/** Key for the Current map symbols; spreadDate is day T of the spread prediction shown, if any. */
+export default function MapLegend({ spreadDate }: { spreadDate: string | null }) {
   return (
     // Hidden on phones, where it would cover most of the map; the sidebar repeats the status colours
     <div className={`hidden sm:block ${BOX}`}>
@@ -22,6 +26,15 @@ export default function MapLegend() {
       ))}
       <div className="flex items-center gap-2 pt-1"><Dot color="#fde68a" size={6} />Satellite hotspot, last 24 h</div>
       <div className="flex items-center gap-2"><Dot color="#eab308" ring />Weather station (colour = FWI)</div>
+      {spreadDate && (
+        <>
+          <p className="text-[10px] uppercase tracking-wide text-gray-500 pt-1">
+            Most likely to burn the day after {new Date(`${spreadDate}T12:00`).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}
+          </p>
+          <div className="flex items-center gap-2"><Swatch color={SPREAD_COLOR.highest} />Highest chance (model)</div>
+          <div className="flex items-center gap-2"><Swatch color={SPREAD_COLOR.elevated} />Elevated chance</div>
+        </>
+      )}
     </div>
   );
 }

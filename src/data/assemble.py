@@ -101,6 +101,15 @@ YEARS_SINCE_FIRE_CAP = 40
 # Buffer around fire perimeter edge for patch sampling (metres)
 
 
+def fire_tiles(west: float, south: float, east: float, north: float) -> list[tuple[float, float]]:
+    """(xmin, ymax) of each patch in a grid centred on a fire's bounds (patch CRS), row by row."""
+    nx = max(1, int(np.ceil((east - west) / PATCH_EXTENT_M)))
+    ny = max(1, int(np.ceil((north - south) / PATCH_EXTENT_M)))
+    x0 = (west + east - nx * PATCH_EXTENT_M) / 2
+    y0 = (south + north + ny * PATCH_EXTENT_M) / 2
+    return [(x0 + c * PATCH_EXTENT_M, y0 - r * PATCH_EXTENT_M) for r, c in np.ndindex(ny, nx)]
+
+
 # ---------------------------------------------------------------------------
 # Patch metadata record
 # ---------------------------------------------------------------------------
@@ -488,15 +497,9 @@ class PatchExtractor:
             return
 
         fire_albers = fire_geom.to_crs(OUTPUT_CRS)
-        west, south, east, north = fire_albers.total_bounds
-        nx = max(1, int(np.ceil((east - west) / PATCH_EXTENT_M)))
-        ny = max(1, int(np.ceil((north - south) / PATCH_EXTENT_M)))
-        # Grid centred on the fire's bounding box
-        x0 = (west + east - nx * PATCH_EXTENT_M) / 2
-        y0 = (south + north + ny * PATCH_EXTENT_M) / 2
-        for k, (r, c) in enumerate(np.ndindex(ny, nx)):
-            xmin, ymax = x0 + c * PATCH_EXTENT_M, y0 - r * PATCH_EXTENT_M
-            tile_id = fire_id if nx * ny == 1 else f"{fire_id}_t{k}"
+        tiles = fire_tiles(*fire_albers.total_bounds)
+        for k, (xmin, ymax) in enumerate(tiles):
+            tile_id = fire_id if len(tiles) == 1 else f"{fire_id}_t{k}"
             yield from self._extract_tile_patches(
                 season, detections, fire_albers, tile_id, year, date_range, xmin, ymax
             )
