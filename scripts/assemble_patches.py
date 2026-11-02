@@ -43,11 +43,11 @@ def parse_args() -> argparse.Namespace:
         nargs=2,
         type=int,
         metavar=("START", "END"),
-        default=[2012, 2023],
+        default=[2012, 2024],
     )
     p.add_argument("--train-years-end", type=int, default=2020)
     p.add_argument("--val-years", nargs="+", type=int, default=[2021, 2022])
-    p.add_argument("--test-years", nargs="+", type=int, default=[2023])
+    p.add_argument("--test-years", nargs="+", type=int, default=[2023, 2024])
     return p.parse_args()
 
 

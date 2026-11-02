@@ -16,7 +16,7 @@ Prediction benchmark:
 
 Usage
 -----
-  python scripts/download_canada.py --province BC --years 2012 2023 [--data-dir data/raw]
+  python scripts/download_canada.py --province BC --years 2012 2024 [--data-dir data/raw]
 
 Notes
 -----
@@ -613,8 +613,8 @@ def parse_args() -> argparse.Namespace:
         nargs=2,
         type=int,
         metavar=("START", "END"),
-        default=[2012, 2023],
-        help="Year range (inclusive). Default: 2012 2023",
+        default=[2012, 2024],
+        help="Year range (inclusive). Default: 2012 2024",
     )
     parser.add_argument(
         "--data-dir", default="data/raw", help="Root directory for raw data"

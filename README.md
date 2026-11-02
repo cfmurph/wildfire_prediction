@@ -25,7 +25,7 @@ Assembled from open Canadian government and scientific sources:
 | Land cover | NRCan Canada LC 2020 | 30 m |
 
 Patches: **64 × 64 pixels at 1 km/pixel**, one per fire-day with new burning. Fires wider than 64 km are covered by a grid of adjacent patches.
-Coverage: **BC fire seasons 2012–2023**.
+Coverage: **BC fire seasons 2012–2024**: train 2012–2020, validation 2021–2022, test 2023 and 2024.
 
 Daily weather uses the local (PDT) day: temperature max/min, minimum relative humidity, 16:00 wind and 24 h precipitation. NDVI comes from MODIS 16-day composites: run `scripts/prepare_ndvi.py` after downloading (it needs `pip install -e ".[data]"` for HDF4). Each patch uses the latest composite that ended by its date, so the input cannot show the next day's burn. `years_since_fire` gives the years since each pixel last burned, from BC fire perimeters back to 1972 (earlier seasons only, capped at 40).
 
@@ -69,7 +69,7 @@ pip install -e ".[dev]"
 
 # 4. Download Canadian data
 # The FIRMS fire-detection archive (data/raw/firms) needs no key; MODIS goes back to 2000
-python scripts/download_canada.py --province BC --years 2012 2023
+python scripts/download_canada.py --province BC --years 2012 2024
 
 # 5. Assemble patches
 python scripts/assemble_patches.py --province BC

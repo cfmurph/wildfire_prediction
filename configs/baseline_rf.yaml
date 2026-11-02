@@ -39,7 +39,7 @@ data:
     # - years_since_fire
   train_years: [2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020]
   val_years: [2021, 2022]
-  test_years: [2023]
+  test_years: [2023, 2024]
   patches_dir: data/processed/patches
   splits_dir: data/processed/splits
   stats_dir: data/processed/stats

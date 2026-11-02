@@ -48,7 +48,7 @@ TARGET_RESOLUTION_M: int = 1000          # 1 km / pixel
 # Fire seasons used for each split
 TRAIN_YEARS: list[int] = list(range(2012, 2021))   # 2012–2020
 VAL_YEARS: list[int] = [2021, 2022]
-TEST_YEARS: list[int] = [2023]
+TEST_YEARS: list[int] = [2023, 2024]
 
 
 # ---------------------------------------------------------------------------
