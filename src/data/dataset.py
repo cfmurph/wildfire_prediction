@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -258,6 +259,10 @@ class WildfireSequenceDataset(Dataset):
         for fid, days in fire_days.items():
             for i in range(len(days) - seq_len + 1):
                 input_records = days[i : i + seq_len]
+                # Days without new burning have no patch, so neighbours in the list can be weeks apart
+                first, last = (date.fromisoformat(r["date"]) for r in (input_records[0], input_records[-1]))
+                if (last - first).days != seq_len - 1:
+                    continue
                 # A patch's y is already the next-day mask, so the last input day carries the target
                 target_record = input_records[-1]
                 self.sequences.append((input_records, target_record))

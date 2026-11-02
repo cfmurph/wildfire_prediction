@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.utils.config import N_CHANNELS, PATCH_SIZE
+from src.utils.config import CHANNELS, N_CHANNELS, PATCH_SIZE
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +135,21 @@ class TestWildfireSequenceDataset:
         assert X_seq.shape == (5, N_CHANNELS, PATCH_SIZE, PATCH_SIZE), \
             f"Expected (5, {N_CHANNELS}, {PATCH_SIZE}, {PATCH_SIZE}), got {X_seq.shape}"
         assert y.shape == (PATCH_SIZE, PATCH_SIZE)
+
+    def test_sequences_only_span_consecutive_days(self, tmp_path):
+        import json
+
+        from src.data.dataset import WildfireSequenceDataset
+        from tests.conftest import make_synthetic_patch
+
+        # Days 1, 2, 3 and 5: only 1–3 is a real 3-day history
+        records = [{"patch_id": f"f_{d}", "fire_id": "f", "date": f"2023-07-0{d}"} for d in (1, 2, 3, 5)]
+        for r in records:
+            make_synthetic_patch(r["patch_id"], out_dir=tmp_path)
+        (tmp_path / "m.json").write_text(json.dumps(records))
+        (tmp_path / "s.json").write_text(json.dumps({ch: {"mean": 0, "std": 1} for ch in CHANNELS}))
+        ds = WildfireSequenceDataset(tmp_path / "m.json", tmp_path, tmp_path / "s.json", seq_len=3)
+        assert [[r["date"] for r in seq] for seq, _ in ds.sequences] == [["2023-07-01", "2023-07-02", "2023-07-03"]]
 
     def test_seq_len_1_matches_single_frame(self, synthetic_dataset):
         from src.data.dataset import WildfireSequenceDataset, WildfireDataset
