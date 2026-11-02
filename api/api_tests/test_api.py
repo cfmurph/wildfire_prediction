@@ -308,6 +308,20 @@ def test_fire_starts_follow_the_season_and_never_invent_data(client, monkeypatch
         ignition._fire_starts.cache_clear()
 
 
+def test_spread_map_serves_the_latest_prediction_or_says_none_ran(client, monkeypatch, tmp_path):
+    from api.routers import predict
+
+    monkeypatch.setattr(predict, "SPREAD_MAP", tmp_path / "spread.geojson")
+    assert client.get("/api/v1/predict/spread-map").status_code == 503
+
+    (tmp_path / "spread.geojson").write_text(
+        '{"type": "FeatureCollection", "features": [], "date": "2026-08-14", "issued": "2026-08-15T14:00+00:00"}'
+    )
+    response = client.get("/api/v1/predict/spread-map")
+    assert response.headers["content-type"] == "application/geo+json"
+    assert response.json()["date"] == "2026-08-14"
+
+
 def test_serves_the_web_app_from_the_same_origin(monkeypatch, tmp_path):
     import importlib
 

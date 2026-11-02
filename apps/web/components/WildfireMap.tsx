@@ -5,7 +5,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { View } from "./ViewSwitcher";
 import { SelectedFire } from "@/app/page";
-import { FIRE_STATUSES, HISTORY_SIZES } from "@/lib/utils";
+import { FIRE_STATUSES, HISTORY_SIZES, SPREAD_COLOR } from "@/lib/utils";
 import MapLegend, { HistoryLegend, HistorySummary } from "./MapLegend";
 import { activeFire, CurrentData } from "@/lib/fires";
 
@@ -43,6 +43,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
   // Layer event handlers registered by the current view; removed on view change so they don't pile up
   const handlers = useRef<[LayerEvent, string, (e: maplibregl.MapLayerMouseEvent) => void][]>([]);
   const [history, setHistory] = useState<HistorySummary>(null);
+  const [spreadDate, setSpreadDate] = useState<string | null>(null);  // day T of the shown spread prediction
 
   const on = useCallback((type: LayerEvent, layer: string, fn: (e: maplibregl.MapLayerMouseEvent) => void) => {
     map.current?.on(type, layer, fn);
@@ -114,7 +115,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     // Remove all layers first, then sources (a source can't be removed while layers use it)
     const layers = [
       "active-fires-glow", "active-fires",
-      "hotspots",
+      "hotspots", "spread",
       "history-fill", "history-outline",
       "ignition-lightning", "ignition-human",
       "fwi-stations",
@@ -124,7 +125,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     layers.forEach(removeLayer);
     // Now safe to remove sources
     const sources = [
-      "active-fires", "hotspots",
+      "active-fires", "hotspots", "spread",
       "history-fill", "ignition-lightning", "ignition-human", "fwi-stations",
     ];
     sources.forEach(removeSource);
@@ -135,18 +136,34 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
     if (!map.current) return;
     clearAllDataLayers();
     const getJson = (path: string) => fetch(`${API}${path}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const [fires, hotspots, stations] = await Promise.all([
+    const [fires, hotspots, stations, spread] = await Promise.all([
       getJson("/api/v1/fires/active"),
       getJson("/api/v1/fires/hotspots?days=1"),
       getJson("/api/v1/weather/fwi"),
+      getJson("/api/v1/predict/spread-map"),
     ]);
     if (!map.current) return;
+    setSpreadDate(spread?.features?.length ? spread.date : null);
     onCurrentData({
       fires: fires?.features ?? null,
       hotspots: hotspots?.features ?? [],
       stations: stations?.features?.length ?? 0,
       updated: new Date(),
     });
+
+    // Likely next-day growth goes at the bottom: shaded areas, never a perimeter line
+    if (spread?.features?.length) {
+      map.current.addSource("spread", { type: "geojson", data: spread });
+      map.current.addLayer({
+        id: "spread",
+        type: "fill",
+        source: "spread",
+        paint: {
+          "fill-color": ["match", ["get", "band"], "highest", SPREAD_COLOR.highest, SPREAD_COLOR.elevated],
+          "fill-opacity": ["match", ["get", "band"], "highest", 0.6, 0.35],
+        },
+      });
+    }
 
     // Satellite hotspots go underneath the fires: small pale dots
     if (hotspots?.features?.length) {
@@ -331,7 +348,7 @@ export default function WildfireMap({ view, onCurrentData, historyYear, riskMont
   return (
     <div className="relative w-full h-full">
       <div ref={mapContainer} className="w-full h-full" />
-      {view === "current" && <MapLegend />}
+      {view === "current" && <MapLegend spreadDate={spreadDate} />}
       {view === "history" && <HistoryLegend summary={history} />}
     </div>
   );

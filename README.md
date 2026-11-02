@@ -97,6 +97,7 @@ The package build backend is `setuptools.build_meta`. `pip install -e .` install
 **BC Wildfire Map**: a MapLibre map of British Columbia with three views:
 
 - **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet).
+  During the fire season it also shades where each actively burning fire is most likely to grow next, from the U-Net (see *Live spread prediction*).
 - **History**: BC fire perimeters by year, 2006 to the current season.
 - **Risk**: where fires typically start in a given month, split into lightning- and human-caused layers: recorded BC fire starts from the National Fire Database, 1996–2025, counted on a 5 km grid, smoothed over about 10 km and averaged per year. `scripts/compute_fire_starts.py` builds `data/processed/stats/fire_starts.json` from the points that `download_canada.py` fetches.
 
@@ -118,6 +119,16 @@ npm run dev
 ```
 
 Open http://localhost:3000. API docs are at http://localhost:8000/docs.
+
+### Live spread prediction
+
+`scripts/predict_spread.py` runs the trained U-Net on every BC fire that is burning, once a day, and writes `data/live/spread.geojson`, which the API serves at `/api/v1/predict/spread-map` and the Current view draws as two bands (highest / elevated chance). It builds inputs like training does, from sources available on the day: FIRMS VIIRS near-real-time detections, ECMWF open-data weather and CWFIS fire-weather grids (`src/data/live.py`). It needs the research environment, `FIRMS_MAP_KEY` and the static raw data from `scripts/download_canada.py`:
+
+```bash
+python -m scripts.predict_spread --checkpoint run1.pt run2.pt run3.pt   # day T = yesterday
+```
+
+Run it each morning, after the night satellite pass. When running the Docker image, mount the output: `-v "$PWD/data/live:/app/data/live"`.
 
 ### Tests
 

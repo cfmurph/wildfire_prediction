@@ -24,6 +24,7 @@ env/
 data/raw/
 data/processed/
 data/external/
+data/live/
 
 # MLflow experiments (large artifacts)
 experiments/mlruns/

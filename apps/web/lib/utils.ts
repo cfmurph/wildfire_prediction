@@ -28,6 +28,9 @@ export const FIRE_STATUSES = [
   { status: "Under Control",  color: "#22c55e" },
 ] as const;
 
+/** Spread-model bands (scripts/predict_spread.py): top 1% and top 5% of land near active fires. */
+export const SPREAD_COLOR = { highest: "#ea580c", elevated: "#fdba74" } as const;
+
 /** Perimeter fill by final size, smallest first. */
 export const HISTORY_SIZES = [
   { ha: 0,      color: "#fef9c3", label: "Under 100 ha" },
