@@ -176,20 +176,29 @@ class WildfireDataset(Dataset):
 
         return X_t, y_t
 
-    def pixel_class_weights(self) -> tuple[float, float]:
+    def pixel_class_weights(self, new_burn_only: bool = False) -> tuple[float, float]:
         """
         Compute positive / negative pixel counts over the whole dataset
         for weighted loss initialisation.
 
         Returns (neg_weight, pos_weight) suitable for BCE pos_weight.
-        Samples up to 500 patches to estimate quickly.
+        Samples up to 500 patches to estimate quickly. With new_burn_only, counts only
+        pixels unburned on the input day: positives are those that burn the next day.
         """
         n_pos = 0
         n_neg = 0
         sample_size = min(len(self.records), 500)
         indices = np.random.choice(len(self.records), sample_size, replace=False)
+        prev_idx = CHANNELS.index("PrevFireMask")
         for i in indices:
             rec = self.records[i]
+            if new_burn_only:
+                npz = np.load(self.patches_dir / f"{rec['patch_id']}.npz")
+                unburned = npz["X"][prev_idx] == 0
+                new = (npz["y"] > 0) & unburned
+                n_pos += int(new.sum())
+                n_neg += int(unburned.sum() - new.sum())
+                continue
             n_pos += rec.get("n_burn_pixels", 0)
             n_neg += rec.get("n_total_pixels", PATCH_SIZE * PATCH_SIZE) - rec.get("n_burn_pixels", 0)
         pos_weight = n_neg / max(n_pos, 1)

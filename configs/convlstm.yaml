@@ -47,6 +47,8 @@ training:
   scheduler: cosine
   dice_weight: 0.5
   early_stopping_patience: 10
+  early_stopping_window: 1      # stop/select on the mean of this many val scores
+  loss_on: all                # all | new_burn (only pixels unburned on the input day)
   num_workers: 4
   seed: 42
 
