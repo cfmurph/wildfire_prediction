@@ -312,9 +312,15 @@ class PatchExtractor:
                 "Run scripts/download_canada.py first."
             )
 
-        gdfs = [gpd.read_file(f) for f in candidates]
+        gdfs = [gpd.read_file(f).to_crs("EPSG:4326") for f in candidates]
+        if cnfdb.exists():
+            # Seasons after the filtered file come straight from the national database
+            last = int(gdfs[0]["YEAR"].max())
+            for nfdb in sorted(self.perimeters_dir.glob("nfdb_extracted/NFDB_poly_*.shp")):
+                newer = gpd.read_file(nfdb, where=f"SRC_AGENCY = '{self.province}' AND YEAR > {last}")
+                if len(newer):
+                    gdfs.append(newer.to_crs("EPSG:4326"))
         gdf = pd.concat(gdfs, ignore_index=True)
-        gdf = gdf.to_crs("EPSG:4326")
 
         # Map column names → internal names
         # Handles both BC WFS schema and CNFDB (NRCan) schema
