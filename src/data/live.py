@@ -96,7 +96,10 @@ def cwfis_grid(var: str, date_str: str, cache_dir: Path) -> Path:
     """CWFIS's daily grid of one FWI-system index over BC, downloaded once."""
     path = cache_dir / f"cwfis_{var.lower()}_{date_str}.tif"
     if not path.exists():
-        path.write_bytes(_get(CWFIS_URL.format(var=var.lower(), d=date_str)))
+        data = _get(CWFIS_URL.format(var=var.lower(), d=date_str))
+        if not data.startswith((b"II", b"MM")):  # a GeoTIFF; a cached error page would break every later run
+            raise RuntimeError(f"CWFIS {var} {date_str}: {data[:200]!r}")
+        path.write_bytes(data)
     return path
 
 
