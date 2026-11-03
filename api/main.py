@@ -9,7 +9,7 @@ FastAPI backend serving all four map views:
   /api/v1/predict/spread — next-day spread probability (heuristic → ML)
   /api/v1/ignition/causes — where fires typically start, by month and cause
 
-Deployed on Railway, which also serves the static web app (apps/web/out) from /.
+Also serves the static web app (apps/web/out) from /.
 All secrets are environment variables.
 """
 

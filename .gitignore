@@ -65,5 +65,6 @@ htmlcov/
 *.pt
 *.pth
 *.ckpt
+*.joblib
 node_modules/
 apps/web/.next/
