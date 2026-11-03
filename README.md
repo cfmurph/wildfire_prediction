@@ -48,7 +48,7 @@ python scripts/evaluate_checkpoints.py --split test --unet seed42.pt seed1.pt se
 python scripts/channel_importance.py --checkpoint seed42.pt   # which inputs the model relies on
 ```
 
-Current U-Net result on real (VIIRS) targets, test season 2023, seeds 42 / 1 / 2: **0.061 ± 0.003** new-burn AUC-PR (0.058 / 0.064 / 0.061), against 0.041 for the distance baseline and 0.003 for random guessing (0.33% of unburned pixels burn the next day). Validation (2021–22): 0.097 against 0.049. The model beats both baselines but only modestly: most of what it gets right is that fires grow at their edges. Data: 16,698 patches from about 1,000 fires; a typical patch gains 4 burned km² out of 4,096.
+Current U-Net result on real (VIIRS) targets, seeds 42 / 1 / 2, new-burn AUC-PR: **0.087 / 0.088 / 0.090** in 2023 against 0.041 for the distance baseline, and **0.099 / 0.106 / 0.103** in 2024 against 0.038. Random guessing scores about 0.003. Validation (2021–22): 0.121 against 0.049. Every run is over twice the distance baseline; resampling the test fires puts the low end at about 1.9× in 2023 and 2.3× in 2024. Data: 18,097 patches from 1,170 fires; a typical patch gains 4 burned km² out of 4,096.
 
 Earlier results (0.45–0.56) were on synthetic targets grown from final perimeters by an FWI- and wind-driven rule. They measured how well a model learns that rule and are not comparable.
 
@@ -152,7 +152,7 @@ CI (`.github/workflows/test.yml`) runs the API, research (CPU PyTorch) and web s
 
 ### Deploy
 
-One Railway service runs everything. `railway.toml` builds `api/Dockerfile` with the repository root as context: a Node stage builds the web app as static files (`output: "export"`), and the Python stage serves them from `/` next to the API under `/api/v1`, so there is one origin and no CORS. Do not set the service root to `api/`. Health check: `GET /health`.
+The app runs locally from one Docker image. `api/Dockerfile` builds with the repository root as context: a Node stage builds the web app as static files (`output: "export"`), and the Python stage serves them from `/` next to the API under `/api/v1`, so there is one origin and no CORS. Health check: `GET /health`.
 
 Upstream feeds (BC Wildfire Service, FIRMS, CWFIS) are cached for 5 minutes per process, past seasons for a day, so visitor traffic does not reach them. Responses are gzip-compressed.
 
@@ -182,7 +182,7 @@ wildfire_prediction/
 │   ├── processed/      # Assembled .npz patches + split manifests (gitignored, except stats/fire_starts.json, which the API serves)
 │   └── external/       # Alberta/Saskatchewan (Phase 2)
 ├── notebooks/          # EDA + experiment notebooks
-├── api/                # FastAPI service (Railway): fires, weather, spread, fire starts; serves the web app
+├── api/                # FastAPI service: fires, weather, spread, fire starts; serves the web app
 ├── apps/web/           # Next.js map, exported as static files
 ├── src/
 │   ├── data/           # Patch assembly + PyTorch Dataset + augmentation

@@ -1,9 +1,8 @@
-"""Tests for `api.main:app`, the API Docker and Railway start."""
+"""Tests for `api.main:app` and the API Docker image."""
 
 from __future__ import annotations
 
 import os
-import tomllib
 from pathlib import Path
 
 import httpx
@@ -14,7 +13,6 @@ REPO = Path(__file__).resolve().parents[2]
 
 def test_deploy_files_parse_and_the_image_can_see_requirements():
     dockerfile = (REPO / "api" / "Dockerfile").read_text()
-    railway = tomllib.loads((REPO / "railway.toml").read_text())
     copied = [
         line.split()[1]
         for line in dockerfile.splitlines()
@@ -23,8 +21,6 @@ def test_deploy_files_parse_and_the_image_can_see_requirements():
     assert copied
     for source in copied:
         assert (REPO / source).is_file(), source
-    assert railway["deploy"]["healthcheckPath"] == "/health"
-    assert "uvicorn" in railway["deploy"]["startCommand"]
     assert "CMD" in dockerfile
 
 

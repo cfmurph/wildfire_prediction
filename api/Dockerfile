@@ -1,4 +1,4 @@
-# Build context is the repository root so `api` imports resolve. See railway.toml.
+# Build context is the repository root so `api` imports resolve.
 
 # 1. The web app as static files
 FROM node:22-slim AS web
