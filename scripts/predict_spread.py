@@ -17,7 +17,7 @@ Bands stop 15 km from the burn, the reach of 97% of next-day growth in training:
 fire-weather days the model otherwise rates land far beyond any one day's run.
 
 Usage:
-  python -m scripts.predict_spread --checkpoint a.pt b.pt c.pt [--date 2026-08-14]   (from the repo root)
+  python -m scripts.predict_spread [--date 2026-08-14]   (from the repo root)
 
 Needs FIRMS_MAP_KEY (api/.env) and the raw static data from scripts/download_canada.py.
 """
@@ -57,14 +57,16 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 BANDS = [("highest", 0.944), ("elevated", 0.539)]
 MAX_REACH_KM = 15       # 97% of next-day new burn in 2012–22 landed within this of the day-T burn
 MAX_HISTORY_DAYS = 120  # burn before this counts as nothing; long enough for any active fire
+MODEL_DIR = Path("experiments/checkpoints/spread")  # the checkpoints and the stats they were trained with
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Predict next-day growth of active BC fires")
-    p.add_argument("--checkpoint", nargs="+", type=Path, required=True, help="U-Net checkpoints to average")
+    p.add_argument("--checkpoint", nargs="+", type=Path, default=sorted(MODEL_DIR.glob("*.pt")),
+                   help="U-Net checkpoints to average")
     p.add_argument("--date", help="day T, YYYY-MM-DD (default: yesterday, UTC)")
     p.add_argument("--raw-dir", type=Path, default=Path("data/raw"))
-    p.add_argument("--stats", type=Path, default=Path("data/processed/stats/channel_stats.json"))
+    p.add_argument("--stats", type=Path, default=MODEL_DIR / "channel_stats.json")
     p.add_argument("--cache-dir", type=Path, default=Path("data/live/cache"))
     p.add_argument("--out", type=Path, default=Path("data/live/spread.geojson"))
     return p.parse_args()
@@ -72,7 +74,9 @@ def parse_args() -> argparse.Namespace:
 
 def known_fires(year: int) -> gpd.GeoDataFrame:
     """BCWS fires not yet out, with their perimeter where one is mapped (else the point), in the patch CRS."""
-    points = asyncio.run(bc_fires.get_active_fires()) or {"features": []}
+    points = asyncio.run(bc_fires.get_active_fires())
+    if points is None:  # an outage must not read as a day with no fires
+        raise RuntimeError("Could not fetch the BCWS active fires")
     perims = asyncio.run(bc_fires.get_historical_perimeters(year)) or {"features": []}
     by_number = {f["properties"].get("fire_number"): shape(f["geometry"]) for f in perims["features"] if f["geometry"]}
     rows = [
@@ -81,7 +85,18 @@ def known_fires(year: int) -> gpd.GeoDataFrame:
          "geometry": by_number.get(f["properties"]["fire_number"]) or shape(f["geometry"])}
         for f in points["features"]
     ]
-    return gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326").to_crs(OUTPUT_CRS)
+    columns = ["fire_number", "fire_name", "ignition_date", "geometry"]
+    return gpd.GeoDataFrame(rows, columns=columns, geometry="geometry", crs="EPSG:4326").to_crs(OUTPUT_CRS)
+
+
+def spread_bands(prob: np.ndarray, burned: np.ndarray) -> np.ndarray:
+    """Band level per pixel (1 is BANDS[0], 0 is none): unburned land within reach of the burn."""
+    band = np.zeros(prob.shape, dtype=np.uint8)
+    for level, (_, cut) in reversed(list(enumerate(BANDS, start=1))):
+        band[prob >= cut] = level
+    band[burned > 0] = 0
+    band[distance_transform_edt(burned == 0) * TARGET_RESOLUTION_M / 1000 > MAX_REACH_KM] = 0
+    return band
 
 
 def main() -> None:
@@ -128,11 +143,7 @@ def main() -> None:
             x = torch.from_numpy(stats.normalize(X).astype(np.float32))[None]
             with torch.no_grad():
                 prob = np.mean([torch.sigmoid(m(x))[0, 0].numpy() for m in models], axis=0)
-            band = np.zeros(shape_, dtype=np.uint8)
-            for level, (_, cut) in reversed(list(enumerate(BANDS, start=1))):
-                band[prob >= cut] = level
-            band[masks[-1] > 0] = 0  # already burned
-            band[distance_transform_edt(masks[-1] == 0) * TARGET_RESOLUTION_M / 1000 > MAX_REACH_KM] = 0
+            band = spread_bands(prob, masks[-1])
             for geom, level in rasterio.features.shapes(band, mask=band > 0, transform=transform):
                 features.append({"type": "Feature", "geometry": geom,
                                  "properties": {"band": BANDS[int(level) - 1][0], "fire_number": fire.fire_number}})

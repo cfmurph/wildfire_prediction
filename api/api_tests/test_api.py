@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import httpx
 import pytest
-
-from api.services.predictor import spread_forecast
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -217,24 +216,6 @@ def test_history_falls_back_to_the_current_season_layer(client, monkeypatch):
     assert props["fire_status"] == "Out"
 
 
-def test_predict_is_a_local_heuristic(client):
-    spread = client.get(
-        "/api/v1/predict/spread",
-        params={"lat": 53.0, "lon": -124.0, "wind_dir": 270, "wind_speed": 5, "fwi": 20, "isi": 8},
-    )
-    assert spread.status_code == 200
-    body = spread.json()
-    percentiles = {feature["properties"]["percentile"] for feature in body["features"]}
-    assert percentiles == {"p25", "p50", "p75"}
-    assert all(feature["properties"]["area_ha"] > 0 for feature in body["features"])
-    direct = spread_forecast(lat=53.0, lon=-124.0)
-    assert {feature["properties"]["percentile"] for feature in direct["features"]} == {
-        "p25",
-        "p50",
-        "p75",
-    }
-
-
 def test_weather_does_not_invent_stations_when_upstream_fails(client, monkeypatch):
     def respond(_url: str):
         raise httpx.ConnectError("cwfis down")
@@ -316,6 +297,9 @@ def test_spread_map_serves_the_latest_prediction_or_says_none_ran(client, monkey
     response = client.get("/api/v1/predict/spread-map")
     assert response.headers["content-type"] == "application/geo+json"
     assert response.json()["date"] == "2026-08-14"
+
+    os.utime(tmp_path / "spread.geojson", (0, 0))
+    assert client.get("/api/v1/predict/spread-map").status_code == 503
 
 
 def test_serves_the_web_app_from_the_same_origin(monkeypatch, tmp_path):

@@ -48,7 +48,7 @@ python scripts/evaluate_checkpoints.py --split test --unet seed42.pt seed1.pt se
 python scripts/channel_importance.py --checkpoint seed42.pt   # which inputs the model relies on
 ```
 
-Current U-Net result on real (VIIRS) targets, seeds 42 / 1 / 2, new-burn AUC-PR: **0.087 / 0.088 / 0.090** in 2023 against 0.041 for the distance baseline, and **0.099 / 0.106 / 0.103** in 2024 against 0.038. Random guessing scores about 0.003. Validation (2021–22): 0.121 against 0.049. Every run is over twice the distance baseline; resampling the test fires puts the low end at about 1.9× in 2023 and 2.3× in 2024. Data: 0 patches from 0 fires; a typical patch gains 4 burned km² out of 4,096.
+Current U-Net result on real (VIIRS) targets, seeds 42 / 1 / 2, new-burn AUC-PR: **0.087 / 0.088 / 0.090** in 2023 against 0.041 for the distance baseline, and **0.099 / 0.106 / 0.103** in 2024 against 0.038. Random guessing scores about 0.003. Validation (2021–22): 0.121 against 0.049. Every run is over twice the distance baseline; resampling the test fires puts the low end at about 1.9× in 2023 and 2.3× in 2024. Data: 18,097 patches from 1,170 fires; a typical patch gains 4 burned km² out of 4,096.
 
 Earlier results (0.45–0.56) were on synthetic targets grown from final perimeters by an FWI- and wind-driven rule. They measured how well a model learns that rule and are not comparable.
 
@@ -96,7 +96,7 @@ The package build backend is `setuptools.build_meta`. `pip install -e .` install
 
 **BC Wildfire Map**: a MapLibre map of British Columbia with three views:
 
-- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet).
+- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather.
   During the fire season it also shades where each actively burning fire is most likely to grow next, from the U-Net (see *Live spread prediction*).
 - **History**: BC fire perimeters by year, 2006 to the current season.
 - **Risk**: where fires typically start in a given month, split into lightning- and human-caused layers: recorded BC fire starts from the National Fire Database, 1996–2025, counted on a 5 km grid, smoothed over about 10 km and averaged per year. `scripts/compute_fire_starts.py` builds `data/processed/stats/fire_starts.json` from the points that `download_canada.py` fetches.
@@ -125,10 +125,19 @@ Open http://localhost:3000. API docs are at http://localhost:8000/docs.
 `scripts/predict_spread.py` runs the trained U-Net on every BC fire that is burning, once a day, and writes `data/live/spread.geojson`, which the API serves at `/api/v1/predict/spread-map` and the Current view draws as two bands (highest / elevated chance). It builds inputs like training does, from sources available on the day: FIRMS VIIRS near-real-time detections, ECMWF open-data weather and CWFIS fire-weather grids (`src/data/live.py`). It needs the research environment, `FIRMS_MAP_KEY` and the static raw data from `scripts/download_canada.py`:
 
 ```bash
-python -m scripts.predict_spread --checkpoint run1.pt run2.pt run3.pt   # day T = yesterday
+python -m scripts.predict_spread   # day T = yesterday
 ```
 
-Run it each morning, after the night satellite pass. When running the Docker image, mount the output: `-v "$PWD/data/live:/app/data/live"`.
+The models are read from `experiments/checkpoints/spread/`. The `.pt` files are not in git, so back them up.
+
+Run it each morning, after the night satellite pass. To do that on a Mac at 08:00 (or on waking, if it was asleep), logging to `data/live/spread.log`:
+
+```bash
+sed "s|REPO|$PWD|g" scripts/com.wildfire.spread.plist > ~/Library/LaunchAgents/com.wildfire.spread.plist
+launchctl load ~/Library/LaunchAgents/com.wildfire.spread.plist
+```
+
+The API stops serving the file once it is two days old, so a stopped job clears the map layer. When running the Docker image, mount the output: `-v "$PWD/data/live:/app/data/live"`.
 
 ### Tests
 

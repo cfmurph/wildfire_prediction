@@ -6,7 +6,7 @@ FastAPI backend serving all four map views:
   /api/v1/fires/hotspots — NASA FIRMS VIIRS NRT hotspots
   /api/v1/fires/history  — BC historical perimeters by year
   /api/v1/weather/fwi    — current CWFIS fire weather
-  /api/v1/predict/spread — next-day spread probability (heuristic → ML)
+  /api/v1/predict/spread-map — next-day spread bands from the U-Net (scripts/predict_spread.py)
   /api/v1/ignition/causes — where fires typically start, by month and cause
 
 Also serves the static web app (apps/web/out) from /.
