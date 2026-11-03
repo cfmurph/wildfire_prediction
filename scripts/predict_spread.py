@@ -17,7 +17,7 @@ Bands stop 15 km from the burn, the reach of 97% of next-day growth in training:
 fire-weather days the model otherwise rates land far beyond any one day's run.
 
 Usage:
-  python -m scripts.predict_spread --checkpoint a.pt b.pt c.pt [--date 2026-08-14]   (from the repo root)
+  python -m scripts.predict_spread [--date 2026-08-14]   (from the repo root)
 
 Needs FIRMS_MAP_KEY (api/.env) and the raw static data from scripts/download_canada.py.
 """
@@ -57,14 +57,16 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 BANDS = [("highest", 0.944), ("elevated", 0.539)]
 MAX_REACH_KM = 15       # 97% of next-day new burn in 2012–22 landed within this of the day-T burn
 MAX_HISTORY_DAYS = 120  # burn before this counts as nothing; long enough for any active fire
+MODEL_DIR = Path("experiments/checkpoints/spread")  # the checkpoints and the stats they were trained with
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Predict next-day growth of active BC fires")
-    p.add_argument("--checkpoint", nargs="+", type=Path, required=True, help="U-Net checkpoints to average")
+    p.add_argument("--checkpoint", nargs="+", type=Path, default=sorted(MODEL_DIR.glob("*.pt")),
+                   help="U-Net checkpoints to average")
     p.add_argument("--date", help="day T, YYYY-MM-DD (default: yesterday, UTC)")
     p.add_argument("--raw-dir", type=Path, default=Path("data/raw"))
-    p.add_argument("--stats", type=Path, default=Path("data/processed/stats/channel_stats.json"))
+    p.add_argument("--stats", type=Path, default=MODEL_DIR / "channel_stats.json")
     p.add_argument("--cache-dir", type=Path, default=Path("data/live/cache"))
     p.add_argument("--out", type=Path, default=Path("data/live/spread.geojson"))
     return p.parse_args()
