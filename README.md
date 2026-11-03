@@ -96,7 +96,7 @@ The package build backend is `setuptools.build_meta`. `pip install -e .` install
 
 **BC Wildfire Map**: a MapLibre map of British Columbia with three views:
 
-- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather, a 24 h spread estimate from a wind- and FWI-driven heuristic (`api/services/predictor.py`; the trained ConvLSTM is not wired in yet).
+- **Current**: active BC fires, NASA FIRMS VIIRS hotspots (NOAA-20/21) and CWFIS fire weather. Each fire's panel shows the nearest station's weather.
   During the fire season it also shades where each actively burning fire is most likely to grow next, from the U-Net (see *Live spread prediction*).
 - **History**: BC fire perimeters by year, 2006 to the current season.
 - **Risk**: where fires typically start in a given month, split into lightning- and human-caused layers: recorded BC fire starts from the National Fire Database, 1996–2025, counted on a 5 km grid, smoothed over about 10 km and averaged per year. `scripts/compute_fire_starts.py` builds `data/processed/stats/fire_starts.json` from the points that `download_canada.py` fetches.
