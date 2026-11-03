@@ -101,6 +101,9 @@ def spread_bands(prob: np.ndarray, burned: np.ndarray) -> np.ndarray:
 
 def main() -> None:
     args = parse_args()
+    # ChannelStats falls back to no normalisation, and the models would then flag nothing without complaint
+    if not (args.checkpoint and args.stats.exists()):
+        raise FileNotFoundError(f"Need checkpoints and stats, got {args.checkpoint} and {args.stats}")
     load_dotenv("api/.env")
     yesterday = pd.Timestamp(datetime.now(timezone.utc).date()) - pd.Timedelta(days=1)
     day = pd.Timestamp(args.date) if args.date else yesterday

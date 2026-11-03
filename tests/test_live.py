@@ -13,7 +13,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds, from_origin
 
 from api.services import bc_fires
-from scripts.predict_spread import BANDS, known_fires, spread_bands
+from scripts.predict_spread import BANDS, known_fires, main, spread_bands
 from src.data import live
 from src.data.assemble import OUTPUT_CRS, PATCH_EXTENT_M
 from src.utils.config import TARGET_RESOLUTION_M
@@ -219,3 +219,10 @@ def test_known_fires_fails_when_the_feed_is_down(monkeypatch):
     fake_feeds(monkeypatch, None, None)
     with pytest.raises(RuntimeError, match="active fires"):
         known_fires(2026)
+
+
+def test_a_missing_stats_file_stops_the_run(monkeypatch, tmp_path):
+    missing = tmp_path / "channel_stats.json"
+    monkeypatch.setattr("sys.argv", ["predict_spread", "--checkpoint", "a.pt", "--stats", str(missing)])
+    with pytest.raises(FileNotFoundError, match="channel_stats"):
+        main()
