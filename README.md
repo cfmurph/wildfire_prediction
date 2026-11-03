@@ -125,10 +125,19 @@ Open http://localhost:3000. API docs are at http://localhost:8000/docs.
 `scripts/predict_spread.py` runs the trained U-Net on every BC fire that is burning, once a day, and writes `data/live/spread.geojson`, which the API serves at `/api/v1/predict/spread-map` and the Current view draws as two bands (highest / elevated chance). It builds inputs like training does, from sources available on the day: FIRMS VIIRS near-real-time detections, ECMWF open-data weather and CWFIS fire-weather grids (`src/data/live.py`). It needs the research environment, `FIRMS_MAP_KEY` and the static raw data from `scripts/download_canada.py`:
 
 ```bash
-python -m scripts.predict_spread --checkpoint run1.pt run2.pt run3.pt   # day T = yesterday
+python -m scripts.predict_spread   # day T = yesterday
 ```
 
-Run it each morning, after the night satellite pass. When running the Docker image, mount the output: `-v "$PWD/data/live:/app/data/live"`.
+The models are read from `experiments/checkpoints/spread/`. The `.pt` files are not in git, so back them up.
+
+Run it each morning, after the night satellite pass. To do that on a Mac at 08:00 (or on waking, if it was asleep), logging to `data/live/spread.log`:
+
+```bash
+sed "s|REPO|$PWD|g" scripts/com.wildfire.spread.plist > ~/Library/LaunchAgents/com.wildfire.spread.plist
+launchctl load ~/Library/LaunchAgents/com.wildfire.spread.plist
+```
+
+The API stops serving the file once it is two days old, so a stopped job clears the map layer. When running the Docker image, mount the output: `-v "$PWD/data/live:/app/data/live"`.
 
 ### Tests
 

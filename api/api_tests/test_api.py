@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
@@ -320,6 +321,9 @@ def test_spread_map_serves_the_latest_prediction_or_says_none_ran(client, monkey
     response = client.get("/api/v1/predict/spread-map")
     assert response.headers["content-type"] == "application/geo+json"
     assert response.json()["date"] == "2026-08-14"
+
+    os.utime(tmp_path / "spread.geojson", (0, 0))
+    assert client.get("/api/v1/predict/spread-map").status_code == 503
 
 
 def test_serves_the_web_app_from_the_same_origin(monkeypatch, tmp_path):
