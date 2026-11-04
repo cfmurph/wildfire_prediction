@@ -15,9 +15,12 @@ import functools
 import io
 import json
 import logging
+import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
@@ -38,6 +41,11 @@ FIRMS_API = "https://firms.modaps.eosdis.nasa.gov/api"
 # Suomi NPP retired on 1 Nov 2026; its two successors give the same two-VIIRS coverage as training
 FIRMS_SATELLITES = ["VIIRS_NOAA20", "VIIRS_NOAA21"]
 FWI_VARS = ["FFMC", "DMC", "DC", "ISI", "BUI", "FWI"]
+ECMWF_PARAMS = ("2t", "2d", "10u", "10v", "mx2t3", "mn2t3", "tp")
+ECMWF_ARCHIVE_STEPS = range(6, 55, 3)  # the day T of the forecast run, then the day being predicted
+BC_LATITUDES = slice(61, 47)  # the archive's crop, north to south as in the forecast grid
+BC_LONGITUDES = slice(-141, -113)
+CACHE_KEEP_DAYS = 7  # archived days stay in the archive; these are the full-size downloads
 
 
 def _get(url: str) -> bytes:
@@ -45,21 +53,15 @@ def _get(url: str) -> bytes:
         return resp.read()
 
 
-def ecmwf_day(date_str: str, cache_dir: Path) -> dict[str, xr.DataArray]:
-    """
-    The same daily fields as PatchExtractor._era5_day, from that day's 00 UTC forecast.
-
-    Steps 6–30 h cover 23:00–23:00 PDT, three-hourly; 16:00 PDT wind is the mean of 21 and 24 h.
-    Only the needed fields are downloaded, by byte range from the run's index.
-    """
+def _ecmwf_fields(date_str: str, steps: range, cache_dir: Path) -> tuple[dict, np.ndarray, np.ndarray]:
+    """Each (param, step) of the day's 00 UTC forecast, by byte range from its index, and the grid's cell centres."""
     d = date_str.replace("-", "")
-    steps = range(6, 31, 3)
     fields = {}
     for step in steps:
         url = ECMWF_URL.format(d=d, step=step)
         index = [json.loads(line) for line in _get(url + ".index").decode().splitlines()]
         for entry in index:
-            if entry["param"] not in ("2t", "2d", "10u", "10v", "mx2t3", "mn2t3", "tp"):
+            if entry["param"] not in ECMWF_PARAMS:
                 continue
             path = cache_dir / f"ecmwf_{d}_{step}_{entry['param']}.grib2"
             if not path.exists():
@@ -74,6 +76,17 @@ def ecmwf_day(date_str: str, cache_dir: Path) -> dict[str, xr.DataArray]:
     # Cell centres, as ERA5's coordinates are
     lats = transform.f + transform.e * (np.arange(shape[0]) + 0.5)
     lons = transform.c + transform.a * (np.arange(shape[1]) + 0.5)
+    return fields, lats, lons
+
+
+def ecmwf_day(date_str: str, cache_dir: Path) -> dict[str, xr.DataArray]:
+    """
+    The same daily fields as PatchExtractor._era5_day, from that day's 00 UTC forecast.
+
+    Steps 6–30 h cover 23:00–23:00 PDT, three-hourly; 16:00 PDT wind is the mean of 21 and 24 h.
+    """
+    steps = range(6, 31, 3)
+    fields, lats, lons = _ecmwf_fields(date_str, steps, cache_dir)
 
     def grid(a: np.ndarray) -> xr.DataArray:
         return xr.DataArray(a, coords={"latitude": lats, "longitude": lons}, dims=("latitude", "longitude"))
@@ -103,11 +116,10 @@ def cwfis_grid(var: str, date_str: str, cache_dir: Path) -> Path:
     return path
 
 
-def firms_detections(start: pd.Timestamp, end: pd.Timestamp, map_key: str, cache_dir: Path) -> pd.DataFrame:
+def _firms_rows(start: pd.Timestamp, end: pd.Timestamp, map_key: str, cache_dir: Path) -> pd.DataFrame:
     """
-    VIIRS detections over BC from start to end (inclusive) as patch-CRS points, filtered as in
-    training. The API serves 5 days per request: from the standard archive while it reaches,
-    near-real-time after. Archive chunks are cached.
+    FIRMS's VIIRS rows over BC from start to end (inclusive). The API serves 5 days per request:
+    from the standard archive while it reaches, near-real-time after. Archive chunks are cached.
     """
     avail = pd.read_csv(io.StringIO(_get(f"{FIRMS_API}/data_availability/csv/{map_key}/all").decode()),
                         index_col=0, parse_dates=["max_date"])
@@ -127,11 +139,76 @@ def firms_detections(start: pd.Timestamp, end: pd.Timestamp, map_key: str, cache
                 if archived:
                     path.write_text(text)
             frames.append(pd.read_csv(io.StringIO(text)))
-    df = pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True)
+
+
+def firms_detections(start: pd.Timestamp, end: pd.Timestamp, map_key: str, cache_dir: Path) -> pd.DataFrame:
+    """VIIRS detections over BC from start to end (inclusive) as patch-CRS points, filtered as in training."""
+    df = _firms_rows(start, end, map_key, cache_dir)
     # Near-real-time rows have no type (vegetation fire or not); the perimeter filter drops other burning
     df = df[(df["confidence"] != "l") & (df.get("type", pd.Series(0, index=df.index)).fillna(0) == 0)]
     x, y = rasterio.warp.transform("EPSG:4326", OUTPUT_CRS, df["longitude"].to_numpy(), df["latitude"].to_numpy())
     return pd.DataFrame({"x": x, "y": y, "date": pd.to_datetime(df["acq_date"]).to_numpy()})
+
+
+def ecmwf_archive(date_str: str, cache_dir: Path) -> xr.Dataset:
+    """The day's forecast fields cropped to BC, three-hourly and out to the day being predicted."""
+    fields, lats, lons = _ecmwf_fields(date_str, ECMWF_ARCHIVE_STEPS, cache_dir)
+    data = {p: (("step", "latitude", "longitude"), np.stack([fields[p, s] for s in ECMWF_ARCHIVE_STEPS]))
+            for p in ECMWF_PARAMS}
+    ds = xr.Dataset(data, coords={"step": list(ECMWF_ARCHIVE_STEPS), "latitude": lats, "longitude": lons})
+    return ds.sel(latitude=BC_LATITUDES, longitude=BC_LONGITUDES)
+
+
+def archive_inputs(day: pd.Timestamp, fires: gpd.GeoDataFrame, map_key: str, cache_dir: Path,
+                   archive_dir: Path) -> dict[str, Path]:
+    """
+    Keep what a live run sees for day T, since ECMWF deletes its forecasts after about 4 days and
+    near-real-time detections and the fire list are later replaced. Returns the files written: a
+    source that fails is logged and skipped, so it cannot cost the day's other sources or prediction.
+    """
+    date_str = f"{day:%Y-%m-%d}"
+    out = archive_dir / date_str
+    out.mkdir(parents=True, exist_ok=True)
+
+    def write_ecmwf(path: Path) -> None:
+        ds = ecmwf_archive(date_str, cache_dir)
+        ds.to_netcdf(path, encoding={p: {"zlib": True} for p in ds.data_vars})
+
+    def write_cwfis(var: str) -> Callable[[Path], None]:
+        def write(path: Path) -> None:
+            with rasterio.open(cwfis_grid(var, date_str, cache_dir)) as src:
+                with rasterio.open(path, "w", **(src.profile | {"compress": "deflate", "predictor": 3})) as dst:
+                    dst.write(src.read())
+        return write
+
+    def write_firms(path: Path) -> None:
+        _firms_rows(day - pd.Timedelta(days=1), day, map_key, cache_dir).to_csv(path, index=False)
+
+    sources = {
+        "ecmwf.nc": write_ecmwf,
+        **{f"cwfis_{var.lower()}.tif": write_cwfis(var) for var in FWI_VARS},
+        "firms.csv.gz": write_firms,
+        "fires.geojson": lambda path: path.write_text(fires.to_crs("EPSG:4326").to_json()),
+    }
+    saved = {}
+    for name, write in sources.items():
+        tmp = out / f"tmp_{name}"  # a failed rewrite leaves the earlier file in place
+        try:
+            write(tmp)
+            saved[name] = tmp.replace(out / name)
+        except Exception:
+            log.exception(f"Could not archive {name} for {date_str}")
+            tmp.unlink(missing_ok=True)
+    return saved
+
+
+def prune_cache(cache_dir: Path) -> None:
+    """Remove the full-size ECMWF and CWFIS downloads once they are too old to rerun a day from."""
+    cutoff = time.time() - CACHE_KEEP_DAYS * 24 * 3600
+    for path in [*cache_dir.glob("ecmwf_*"), *cache_dir.glob("cwfis_*")]:
+        if path.stat().st_mtime < cutoff:
+            path.unlink()
 
 
 class LiveAssembler(PatchExtractor):

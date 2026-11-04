@@ -147,6 +147,8 @@ psql wildfire -f db/schema.sql
 echo 'DATABASE_URL=postgresql://localhost/wildfire' >> api/.env
 ```
 
+Each run also keeps the day's inputs in `data/live/archive/<date>/`, listed in the `input_archive` table: the ECMWF forecast cropped to BC and out to the day being predicted, the CWFIS grids, FIRMS rows and the BCWS fire list. ECMWF deletes its forecasts after about 4 days, so a day not archived cannot be backtested later. After pulling a change to `db/schema.sql`, run `psql wildfire -f db/schema.sql` again.
+
 Browse it with pgAdmin: host `localhost`, port `5432`, database `wildfire`, your Mac username.
 
 With `DATABASE_URL` set the API reads the database and stops serving a run three days after its date, so a stopped job clears the map layer. Without it the API serves the file, up to two days old: when running the Docker image, mount the output with `-v "$PWD/data/live:/app/data/live"`.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from pathlib import Path
 
 import psycopg
 
@@ -34,6 +35,17 @@ def save_run(database_url: str, collection: dict) -> None:
             "VALUES (%s, %s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))",
             [(collection["date"], f["properties"]["fire_number"], f["properties"]["band"], json.dumps(f["geometry"]))
              for f in collection["features"]],
+        )
+
+
+def save_archive(database_url: str, date_str: str, files: dict[str, Path]) -> None:
+    """Record which input files a day has in the archive."""
+    with psycopg.connect(database_url) as conn:
+        conn.cursor().executemany(
+            "INSERT INTO input_archive (date, source, path, bytes) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (date, source) DO UPDATE "
+            "SET path = EXCLUDED.path, bytes = EXCLUDED.bytes, archived_at = now()",
+            [(date_str, source, str(path), path.stat().st_size) for source, path in files.items()],
         )
 
 
