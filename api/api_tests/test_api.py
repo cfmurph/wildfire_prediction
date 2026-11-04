@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+import psycopg
 import pytest
+
+from api.services import spread_store
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -299,6 +303,79 @@ def test_spread_map_serves_the_latest_prediction_or_says_none_ran(client, monkey
     assert response.json()["date"] == "2026-08-14"
 
     os.utime(tmp_path / "spread.geojson", (0, 0))
+    assert client.get("/api/v1/predict/spread-map").status_code == 503
+
+
+@pytest.fixture
+def spread_db(monkeypatch):
+    """The test database, emptied. Never the real one: needs TEST_DATABASE_URL."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL is not set")
+    with psycopg.connect(url) as conn:
+        conn.execute("TRUNCATE spread_run CASCADE")
+    monkeypatch.setenv("DATABASE_URL", url)
+    return url
+
+
+def spread_collection(day, issued="2026-08-15T14:00+00:00", number="G1"):
+    ring = [[-125.0, 53.0], [-124.9, 53.0], [-124.9, 53.1], [-125.0, 53.0]]
+    feature = {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]},
+               "properties": {"band": "highest", "fire_number": number}}
+    return {"type": "FeatureCollection", "features": [feature], "date": str(day), "issued": issued}
+
+
+def test_spread_map_serves_the_latest_run_from_the_database(client, spread_db):
+    assert client.get("/api/v1/predict/spread-map").status_code == 503
+
+    today = datetime.now(timezone.utc).date()
+    spread_store.save_run(spread_db, spread_collection(today - timedelta(days=2), number="older"))
+    spread_store.save_run(spread_db, spread_collection(today - timedelta(days=1)))
+    response = client.get("/api/v1/predict/spread-map")
+    assert response.headers["content-type"] == "application/geo+json"
+    body = response.json()
+    assert body["date"] == str(today - timedelta(days=1))
+    assert datetime.fromisoformat(body["issued"]) == datetime(2026, 8, 15, 14, tzinfo=timezone.utc)
+    assert [f["properties"] for f in body["features"]] == [{"band": "highest", "fire_number": "G1"}]
+    assert body["features"][0]["geometry"]["type"] == "Polygon"
+    assert body["features"][0]["geometry"]["coordinates"][0][0] == [-125, 53]
+
+
+def test_rerunning_a_day_replaces_it_and_keeps_empty_days(client, spread_db):
+    today = datetime.now(timezone.utc).date()
+    spread_store.save_run(spread_db, spread_collection(today))
+    spread_store.save_run(spread_db, spread_collection(today) | {"features": []})
+    body = client.get("/api/v1/predict/spread-map").json()
+    assert body["date"] == str(today)
+    assert body["features"] == []
+
+
+def test_a_failed_save_keeps_the_days_earlier_run(client, spread_db):
+    today = datetime.now(timezone.utc).date()
+    spread_store.save_run(spread_db, spread_collection(today))
+    bad = spread_collection(today)
+    bad["features"][0]["properties"]["band"] = "not a band"
+    with pytest.raises(psycopg.errors.CheckViolation):
+        spread_store.save_run(spread_db, bad)
+    assert len(client.get("/api/v1/predict/spread-map").json()["features"]) == 1
+
+
+def test_spread_map_from_the_database_goes_stale_by_the_runs_date(client, spread_db):
+    today = datetime.now(timezone.utc).date()
+    spread_store.save_run(spread_db, spread_collection(today - timedelta(days=3)))
+    assert client.get("/api/v1/predict/spread-map").status_code == 200
+    with psycopg.connect(spread_db) as conn:
+        conn.execute("TRUNCATE spread_run CASCADE")
+    spread_store.save_run(spread_db, spread_collection(today - timedelta(days=4)))
+    assert client.get("/api/v1/predict/spread-map").status_code == 503
+
+
+def test_spread_map_reports_an_unreachable_database(client, monkeypatch):
+    def refuse(url):
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nowhere/wildfire")
+    monkeypatch.setattr(spread_store.psycopg, "connect", refuse)
     assert client.get("/api/v1/predict/spread-map").status_code == 503
 
 

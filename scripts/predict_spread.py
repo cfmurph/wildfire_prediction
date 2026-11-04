@@ -19,7 +19,7 @@ fire-weather days the model otherwise rates land far beyond any one day's run.
 Usage:
   python -m scripts.predict_spread [--date 2026-08-14]   (from the repo root)
 
-Needs FIRMS_MAP_KEY (api/.env) and the raw static data from scripts/download_canada.py.
+Needs FIRMS_MAP_KEY and DATABASE_URL (api/.env) and the raw static data from scripts/download_canada.py.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from rasterio.transform import from_bounds
 from scipy.ndimage import distance_transform_edt
 from shapely.geometry import shape
 
-from api.services import bc_fires
+from api.services import bc_fires, spread_store
 from src.data.assemble import OUTPUT_CRS, PATCH_EXTENT_M, fire_tiles, firms_daily_masks
 from src.data.dataset import ChannelStats
 from src.data.live import LiveAssembler, firms_detections
@@ -157,6 +157,10 @@ def main() -> None:
     collection = json.loads(out.to_json()) if out is not None else {"type": "FeatureCollection", "features": []}
     collection.update(date=f"{day:%Y-%m-%d}", issued=datetime.now(timezone.utc).isoformat(timespec="minutes"))
     args.out.write_text(json.dumps(collection))
+    if database_url := os.environ.get("DATABASE_URL"):
+        spread_store.save_run(database_url, collection)
+    else:
+        log.warning("DATABASE_URL is not set: this run is only in the file")
     log.info(f"Wrote {len(collection['features'])} areas for {day:%Y-%m-%d} to {args.out}")
 
 
