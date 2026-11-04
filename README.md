@@ -153,6 +153,8 @@ A failed run, or one that could not predict a fire or archive a source, sends a 
 
 Each morning also scores the previous prediction against that day's new detections, by fire in `spread_score` and by day in the `spread_score_daily` view. It needs the day's prediction and archived fire list, and catches up on days up to a week back. Detections are a lower bound on what burned, because cloud and smoke hide fire, and a day's score is noisy: judge the model over many days.
 
+To back up what cannot be recreated, set `BACKUP_DIR` in `api/.env` to a folder on another disk or in cloud storage. Each successful run then saves a database dump (the newest 14 are kept) and copies the archive and models there, about 2.5 GB a year; a failure sends a notification. Run `python -m scripts.backup` to do it by hand. `api/.env` itself is not copied. To restore: `createdb wildfire && pg_restore --dbname wildfire <dump>`.
+
 Browse it with pgAdmin: host `localhost`, port `5432`, database `wildfire`, your Mac username.
 
 With `DATABASE_URL` set the API reads the database and stops serving a run three days after its date, so a stopped job clears the map layer. Without it the API serves the file, up to two days old: when running the Docker image, mount the output with `-v "$PWD/data/live:/app/data/live"`.
@@ -188,6 +190,7 @@ docker run --rm -p 8000:8000 -e FIRMS_MAP_KEY=... bc-wildfire-map   # http://loc
 |---|---|---|---|
 | `FIRMS_MAP_KEY` | API | for hotspots | NASA FIRMS map key; without it the map shows no hotspots |
 | `DATABASE_URL` | API, daily job | for history | Postgres holding the spread predictions; without it the API serves the file |
+| `BACKUP_DIR` | Daily job | for backups | Folder for the database dump, input archive and models |
 | `CORS_ORIGINS` | API | local dev only | Browser origins allowed to call the API from `next dev`. Defaults to `http://localhost:3000` |
 | `NEXT_PUBLIC_API_URL` | Web | local dev only | API for `next dev`; defaults to `http://localhost:8000`. Production builds call their own origin |
 
