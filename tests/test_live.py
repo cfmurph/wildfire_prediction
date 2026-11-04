@@ -1,10 +1,12 @@
 """The live sources' response formats, faked from real samples, and the spread script's helpers."""
 
+import http.client
 import io
 import json
 import os
 import re
 import time
+import urllib.error
 
 import geopandas as gpd
 import numpy as np
@@ -18,7 +20,8 @@ from rasterio.transform import from_bounds, from_origin
 from shapely.geometry import Point
 
 from api.services import bc_fires
-from scripts.predict_spread import BANDS, known_fires, main, spread_bands
+from scripts import predict_spread
+from scripts.predict_spread import BANDS, known_fires, main, predict_fires, spread_bands
 from src.data import live
 from src.data.assemble import OUTPUT_CRS, PATCH_EXTENT_M
 from src.utils.config import TARGET_RESOLUTION_M
@@ -48,12 +51,13 @@ def fake_ecmwf(monkeypatch, values, steps):
             blob += data
         blobs[url + ".grib2"], index[url + ".index"] = blob, "\n".join(lines).encode()
 
-    def urlopen(req, timeout):
-        first, last = map(int, re.fullmatch(r"bytes=(\d+)-(\d+)", req.get_header("Range")).groups())
-        return io.BytesIO(blobs[req.full_url][first:last + 1])
+    def get(url, headers=None):
+        if not headers:
+            return index[url]
+        first, last = map(int, re.fullmatch(r"bytes=(\d+)-(\d+)", headers["Range"]).groups())
+        return blobs[url][first:last + 1]
 
-    monkeypatch.setattr(live, "_get", lambda url: index[url])
-    monkeypatch.setattr(live.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(live, "_get", get)
 
 
 @pytest.mark.parametrize("tp30, precip", [(0.012, 10.0), (0.001, 0.0)])
@@ -157,7 +161,7 @@ def archive_fixtures(monkeypatch, tmp_path, fail=()):
     fake_ecmwf(monkeypatch, ecmwf_values, live.ECMWF_ARCHIVE_STEPS)
     real_get = live._get
 
-    def get(url):
+    def get(url, headers=None):
         if "firms" in url:
             if "firms" in fail:
                 raise OSError("FIRMS is down")
@@ -165,7 +169,7 @@ def archive_fixtures(monkeypatch, tmp_path, fail=()):
                 return (b"data_id,min_date,max_date\n"
                         + b"".join(f"{s}_SP,2018-04-01,2026-07-31\n".encode() for s in live.FIRMS_SATELLITES))
             return f"{NRT_HEADER}\n{firms_row('2026-08-01')}\n".encode()
-        return real_get(url)
+        return real_get(url, headers)
 
     monkeypatch.setattr(live, "_get", get)
     for var in live.FWI_VARS:
@@ -175,8 +179,9 @@ def archive_fixtures(monkeypatch, tmp_path, fail=()):
 
 def test_archive_inputs_keeps_each_source_readable(monkeypatch, tmp_path):
     fires = archive_fixtures(monkeypatch, tmp_path)
-    saved = live.archive_inputs(pd.Timestamp("2026-08-01"), fires, "KEY", tmp_path, tmp_path / "archive")
+    saved, failed = live.archive_inputs(pd.Timestamp("2026-08-01"), fires, "KEY", tmp_path, tmp_path / "archive")
 
+    assert failed == []
     assert set(saved) == {"ecmwf.nc", "firms.csv.gz", "fires.geojson",
                           *(f"cwfis_{v.lower()}.tif" for v in live.FWI_VARS)}
     assert saved["ecmwf.nc"].parent == tmp_path / "archive" / "2026-08-01"
@@ -196,8 +201,9 @@ def test_a_failing_source_costs_only_itself_and_keeps_an_earlier_file(monkeypatc
     out = tmp_path / "archive" / "2026-08-01"
     out.mkdir(parents=True)
     (out / "firms.csv.gz").write_bytes(b"from the first run")
-    saved = live.archive_inputs(pd.Timestamp("2026-08-01"), fires, "KEY", tmp_path, tmp_path / "archive")
+    saved, failed = live.archive_inputs(pd.Timestamp("2026-08-01"), fires, "KEY", tmp_path, tmp_path / "archive")
 
+    assert failed == ["firms.csv.gz"]
     assert "firms.csv.gz" not in saved
     assert "ecmwf.nc" in saved and "fires.geojson" in saved
     assert (out / "firms.csv.gz").read_bytes() == b"from the first run"
@@ -313,8 +319,109 @@ def test_known_fires_fails_when_the_feed_is_down(monkeypatch):
         known_fires(2026)
 
 
-def test_a_missing_stats_file_stops_the_run(monkeypatch, tmp_path):
+def test_a_missing_stats_file_stops_the_run_and_says_so(monkeypatch, tmp_path):
+    notes = []
+    monkeypatch.setattr(predict_spread, "notify", notes.append)
     missing = tmp_path / "channel_stats.json"
     monkeypatch.setattr("sys.argv", ["predict_spread", "--checkpoint", "a.pt", "--stats", str(missing)])
     with pytest.raises(FileNotFoundError, match="channel_stats"):
         main()
+    assert "FileNotFoundError" in notes[0]
+
+
+def fires_and_buffers(*points):
+    fires = gpd.GeoDataFrame({"fire_number": [f"G{i}" for i in range(len(points))], "fire_name": ""},
+                             geometry=[Point(p) for p in points], crs=OUTPUT_CRS)
+    return fires, fires.geometry.buffer(1000)
+
+
+def test_a_failed_tile_costs_only_that_fire():
+    fires, buffered = fires_and_buffers((1_000_000, 1_000_000), (1_500_000, 1_000_000))
+
+    def predict_tile(fire, xmin, ymax):
+        if fire.fire_number == "G0":
+            raise ValueError("bad tile")
+        return [{"properties": {"fire_number": fire.fire_number}}]
+
+    features, failed = predict_fires(fires, buffered, predict_tile)
+    assert failed == ["G0"]
+    assert [f["properties"]["fire_number"] for f in features] == ["G1"]
+
+
+def test_a_tile_not_burning_is_no_failure():
+    fires, buffered = fires_and_buffers((1_000_000, 1_000_000))
+    assert predict_fires(fires, buffered, lambda fire, xmin, ymax: None) == ([], [])
+
+
+def test_a_tile_shared_by_two_fires_is_predicted_once():
+    fires, buffered = fires_and_buffers((1_000_000, 1_000_000), (1_000_000, 1_000_000))
+    calls = []
+    predict_fires(fires, buffered, lambda fire, xmin, ymax: calls.append(fire.fire_number) or [])
+    assert calls == ["G0"]
+
+
+def test_every_burning_tile_failing_stops_the_run():
+    fires, buffered = fires_and_buffers((1_000_000, 1_000_000), (1_500_000, 1_000_000))
+
+    def predict_tile(fire, xmin, ymax):
+        raise ValueError("no weather today")
+
+    with pytest.raises(RuntimeError, match="G0"):
+        predict_fires(fires, buffered, predict_tile)
+
+
+class FakeResponse(io.BytesIO):
+    pass
+
+
+@pytest.mark.parametrize("error", [
+    urllib.error.URLError("connection reset"),
+    urllib.error.HTTPError("u", 503, "busy", None, None),
+    http.client.IncompleteRead(b"partial"),
+])
+def test_get_retries_what_may_pass(monkeypatch, error):
+    outcomes = [error, FakeResponse(b"body")]
+
+    def urlopen(req, timeout):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(live, "RETRY_SECONDS", 0)
+    assert live._get("https://example.test") == b"body"
+
+
+def test_get_gives_up_at_once_on_a_404_and_after_repeated_failures(monkeypatch):
+    calls = []
+
+    def fail_with(error):
+        def urlopen(req, timeout):
+            calls.append(req.full_url)
+            raise error
+        return urlopen
+
+    monkeypatch.setattr(live, "RETRY_SECONDS", 0)
+    monkeypatch.setattr(live.urllib.request, "urlopen", fail_with(urllib.error.HTTPError("u", 404, "gone", None, None)))
+    with pytest.raises(urllib.error.HTTPError):
+        live._get("https://example.test")
+    assert len(calls) == 1
+
+    calls.clear()
+    monkeypatch.setattr(live.urllib.request, "urlopen", fail_with(urllib.error.URLError("down")))
+    with pytest.raises(urllib.error.URLError):
+        live._get("https://example.test")
+    assert len(calls) == live.GET_ATTEMPTS
+
+
+def test_get_sends_the_range_header(monkeypatch):
+    seen = {}
+
+    def urlopen(req, timeout):
+        seen["range"] = req.get_header("Range")
+        return FakeResponse(b"x")
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", urlopen)
+    live._get("https://example.test", {"Range": "bytes=0-9"})
+    assert seen["range"] == "bytes=0-9"

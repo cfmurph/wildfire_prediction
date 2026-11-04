@@ -29,7 +29,8 @@ def save_run(database_url: str, collection: dict) -> None:
     """Store a day's prediction, replacing any earlier run for that day, all or nothing."""
     with psycopg.connect(database_url) as conn:
         conn.execute("DELETE FROM spread_run WHERE date = %s", (collection["date"],))
-        conn.execute("INSERT INTO spread_run VALUES (%s, %s)", (collection["date"], collection["issued"]))
+        conn.execute("INSERT INTO spread_run (date, issued, failed_fires) VALUES (%s, %s, %s)",
+                     (collection["date"], collection["issued"], collection.get("failed_fires", [])))
         conn.cursor().executemany(
             "INSERT INTO spread_area (date, fire_number, band, geom) "
             "VALUES (%s, %s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))",
