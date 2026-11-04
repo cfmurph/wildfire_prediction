@@ -122,7 +122,7 @@ Open http://localhost:3000. API docs are at http://localhost:8000/docs.
 
 ### Live spread prediction
 
-`scripts/predict_spread.py` runs the trained U-Net on every BC fire that is burning, once a day, and writes `data/live/spread.geojson`, which the API serves at `/api/v1/predict/spread-map` and the Current view draws as two bands (highest / elevated chance). It builds inputs like training does, from sources available on the day: FIRMS VIIRS near-real-time detections, ECMWF open-data weather and CWFIS fire-weather grids (`src/data/live.py`). It needs the research environment, `FIRMS_MAP_KEY` and the static raw data from `scripts/download_canada.py`:
+`scripts/predict_spread.py` runs the trained U-Net on every BC fire that is burning, once a day, and writes it to Postgres and `data/live/spread.geojson`. The API serves it at `/api/v1/predict/spread-map` and the Current view draws as two bands (highest / elevated chance). It builds inputs like training does, from sources available on the day: FIRMS VIIRS near-real-time detections, ECMWF open-data weather and CWFIS fire-weather grids (`src/data/live.py`). It needs the research environment, `FIRMS_MAP_KEY` and the static raw data from `scripts/download_canada.py`:
 
 ```bash
 python -m scripts.predict_spread   # day T = yesterday
@@ -137,13 +137,26 @@ sed "s|REPO|$PWD|g" scripts/com.wildfire.spread.plist > ~/Library/LaunchAgents/c
 launchctl load ~/Library/LaunchAgents/com.wildfire.spread.plist
 ```
 
-The API stops serving the file once it is two days old, so a stopped job clears the map layer. When running the Docker image, mount the output: `-v "$PWD/data/live:/app/data/live"`.
+The predictions are kept in a private Postgres database with PostGIS, one row per day, so there is a history to score. To set it up on a Mac:
+
+```bash
+brew install postgresql@17 postgis
+brew services start postgresql@17
+createdb wildfire
+psql wildfire -f db/schema.sql
+echo 'DATABASE_URL=postgresql://localhost/wildfire' >> api/.env
+```
+
+Browse it with pgAdmin: host `localhost`, port `5432`, database `wildfire`, your Mac username.
+
+With `DATABASE_URL` set the API reads the database and stops serving a run three days after its date, so a stopped job clears the map layer. Without it the API serves the file, up to two days old: when running the Docker image, mount the output with `-v "$PWD/data/live:/app/data/live"`.
 
 ### Tests
 
 ```bash
 pip install -r api/requirements-dev.txt
-pytest -c api/pytest.ini --rootdir api api/api_tests   # API (network is mocked)
+createdb wildfire_test && psql wildfire_test -f db/schema.sql    # once, for the database tests
+TEST_DATABASE_URL=postgresql://localhost/wildfire_test pytest -c api/pytest.ini --rootdir api api/api_tests   # API (network is mocked)
 pytest tests/                                         # research
 cd apps/web && npm test && npm run test:e2e           # web unit + Playwright
 ```
@@ -168,6 +181,7 @@ docker run --rm -p 8000:8000 -e FIRMS_MAP_KEY=... bc-wildfire-map   # http://loc
 | Variable | Service | Required | Purpose |
 |---|---|---|---|
 | `FIRMS_MAP_KEY` | API | for hotspots | NASA FIRMS map key; without it the map shows no hotspots |
+| `DATABASE_URL` | API, daily job | for history | Postgres holding the spread predictions; without it the API serves the file |
 | `CORS_ORIGINS` | API | local dev only | Browser origins allowed to call the API from `next dev`. Defaults to `http://localhost:3000` |
 | `NEXT_PUBLIC_API_URL` | Web | local dev only | API for `next dev`; defaults to `http://localhost:8000`. Production builds call their own origin |
 

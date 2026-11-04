@@ -17,6 +17,7 @@ def _blocked(*_args, **_kwargs):
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("FIRMS_MAP_KEY", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     clear_all()  # each test sees its own upstream responses
     monkeypatch.setattr(httpx, "AsyncClient", _blocked)
 
