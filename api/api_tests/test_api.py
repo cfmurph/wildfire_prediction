@@ -370,6 +370,12 @@ def test_spread_map_from_the_database_goes_stale_by_the_runs_date(client, spread
     assert client.get("/api/v1/predict/spread-map").status_code == 503
 
 
+def test_a_run_records_the_fires_it_could_not_predict(spread_db):
+    spread_store.save_run(spread_db, spread_collection("2026-08-14") | {"failed_fires": ["G2"]})
+    with psycopg.connect(spread_db) as conn:
+        assert conn.execute("SELECT failed_fires FROM spread_run").fetchone() == (["G2"],)
+
+
 def test_archive_records_each_file_and_updates_a_rerun(spread_db, tmp_path):
     path = tmp_path / "ecmwf.nc"
     path.write_bytes(b"12345")

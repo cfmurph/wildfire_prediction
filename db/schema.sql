@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS spread_run (
   issued timestamptz NOT NULL
 );
 
+-- Fires with a tile that could not be predicted: no areas for them does not mean nothing flagged
+ALTER TABLE spread_run ADD COLUMN IF NOT EXISTS failed_fires text[] NOT NULL DEFAULT '{}';
+
 CREATE TABLE IF NOT EXISTS spread_area (
   date date NOT NULL REFERENCES spread_run ON DELETE CASCADE,
   fire_number text NOT NULL,

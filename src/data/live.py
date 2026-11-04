@@ -12,10 +12,12 @@ training, through PatchExtractor, so live patches are built exactly like trainin
 from __future__ import annotations
 
 import functools
+import http.client
 import io
 import json
 import logging
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -45,12 +47,22 @@ ECMWF_PARAMS = ("2t", "2d", "10u", "10v", "mx2t3", "mn2t3", "tp")
 ECMWF_ARCHIVE_STEPS = range(6, 55, 3)  # the day T of the forecast run, then the day being predicted
 BC_LATITUDES = slice(61, 47)  # the archive's crop, north to south as in the forecast grid
 BC_LONGITUDES = slice(-141, -113)
+GET_ATTEMPTS = 3
+RETRY_SECONDS = 30
 CACHE_KEEP_DAYS = 7  # archived days stay in the archive; these are the full-size downloads
 
 
-def _get(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=120) as resp:
-        return resp.read()
+def _get(url: str, headers: dict | None = None) -> bytes:
+    """The response body, retrying what may pass: dropped connections and server errors, not a 404."""
+    for attempt in range(GET_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=120) as resp:
+                return resp.read()
+        except (OSError, http.client.HTTPException) as exc:
+            client_error = isinstance(exc, urllib.error.HTTPError) and exc.code < 500
+            if client_error or attempt == GET_ATTEMPTS - 1:
+                raise
+            time.sleep(RETRY_SECONDS * (attempt + 1))
 
 
 def _ecmwf_fields(date_str: str, steps: range, cache_dir: Path) -> tuple[dict, np.ndarray, np.ndarray]:
@@ -65,10 +77,8 @@ def _ecmwf_fields(date_str: str, steps: range, cache_dir: Path) -> tuple[dict, n
                 continue
             path = cache_dir / f"ecmwf_{d}_{step}_{entry['param']}.grib2"
             if not path.exists():
-                req = urllib.request.Request(url + ".grib2", headers={
-                    "Range": f"bytes={entry['_offset']}-{entry['_offset'] + entry['_length'] - 1}"})
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    path.write_bytes(resp.read())
+                last_byte = entry["_offset"] + entry["_length"] - 1
+                path.write_bytes(_get(url + ".grib2", {"Range": f"bytes={entry['_offset']}-{last_byte}"}))
             with rasterio.Env(GRIB_NORMALIZE_UNITS="NO"), rasterio.open(path) as src:
                 fields[entry["param"], step] = src.read(1).astype(np.float32)
                 transform, shape = src.transform, src.shape
@@ -161,11 +171,11 @@ def ecmwf_archive(date_str: str, cache_dir: Path) -> xr.Dataset:
 
 
 def archive_inputs(day: pd.Timestamp, fires: gpd.GeoDataFrame, map_key: str, cache_dir: Path,
-                   archive_dir: Path) -> dict[str, Path]:
+                   archive_dir: Path) -> tuple[dict[str, Path], list[str]]:
     """
     Keep what a live run sees for day T, since ECMWF deletes its forecasts after about 4 days and
-    near-real-time detections and the fire list are later replaced. Returns the files written: a
-    source that fails is logged and skipped, so it cannot cost the day's other sources or prediction.
+    near-real-time detections and the fire list are later replaced. Returns the files written and
+    the sources that failed: those are logged and skipped, so they cannot cost the day's prediction.
     """
     date_str = f"{day:%Y-%m-%d}"
     out = archive_dir / date_str
@@ -191,7 +201,7 @@ def archive_inputs(day: pd.Timestamp, fires: gpd.GeoDataFrame, map_key: str, cac
         "firms.csv.gz": write_firms,
         "fires.geojson": lambda path: path.write_text(fires.to_crs("EPSG:4326").to_json()),
     }
-    saved = {}
+    saved, failed = {}, []
     for name, write in sources.items():
         tmp = out / f"tmp_{name}"  # a failed rewrite leaves the earlier file in place
         try:
@@ -200,7 +210,8 @@ def archive_inputs(day: pd.Timestamp, fires: gpd.GeoDataFrame, map_key: str, cac
         except Exception:
             log.exception(f"Could not archive {name} for {date_str}")
             tmp.unlink(missing_ok=True)
-    return saved
+            failed.append(name)
+    return saved, failed
 
 
 def prune_cache(cache_dir: Path) -> None:

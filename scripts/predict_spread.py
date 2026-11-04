@@ -29,6 +29,8 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -101,8 +103,53 @@ def spread_bands(prob: np.ndarray, burned: np.ndarray) -> np.ndarray:
     return band
 
 
+def predict_fires(fires, buffered, predict_tile) -> tuple[list[dict], list[str]]:
+    """
+    predict_tile's features over every fire's tiles, and the fires a tile failed for. predict_tile
+    returns None for a tile not burning. A failed tile costs only itself, unless none was predicted
+    at all: that is a broken run, such as a missing day of weather, not a quiet day.
+    """
+    features, failed, done, predicted = [], [], set(), 0
+    for fire in fires.itertuples():
+        for xmin, ymax in fire_tiles(*buffered[fire.Index].bounds):
+            if (xmin, ymax) in done:
+                continue
+            done.add((xmin, ymax))
+            try:
+                tile_features = predict_tile(fire, xmin, ymax)
+            except Exception:
+                log.exception(f"Could not predict a tile of {fire.fire_number}")
+                failed.append(fire.fire_number)
+                continue
+            if tile_features is not None:
+                predicted += 1
+                features.extend(tile_features)
+    if failed and not predicted:
+        raise RuntimeError(f"Every burning tile failed: {sorted(set(failed))}")
+    return features, sorted(set(failed))
+
+
+def notify(message: str) -> None:
+    """A macOS notification, since nobody reads the job's log until something looks wrong."""
+    if sys.platform == "darwin":
+        script = f'display notification {json.dumps(message)} with title "Wildfire spread run"'
+        subprocess.run(["osascript", "-e", script], check=False)
+
+
 def main() -> None:
     args = parse_args()
+    try:
+        problems = run(args)
+    except Exception as exc:
+        notify(f"Failed with {type(exc).__name__}, so the map was not updated. See data/live/spread.log")
+        raise
+    if problems:
+        notify(f"Finished with problems: {'; '.join(problems)}. See data/live/spread.log")
+
+
+def run(args: argparse.Namespace) -> list[str]:
+    """Predict and archive one day; returns what went wrong without stopping the run."""
+    problems = []
     # ChannelStats falls back to no normalisation, and the models would then flag nothing without complaint
     if not (args.checkpoint and args.stats.exists()):
         raise FileNotFoundError(f"Need checkpoints and stats, got {args.checkpoint} and {args.stats}")
@@ -115,7 +162,9 @@ def main() -> None:
     log.info(f"{len(fires)} BCWS fires not out")
     # First, so a failure later in the run does not lose the day's inputs
     if (yesterday - day).days <= ARCHIVE_WITHIN_DAYS:
-        saved = archive_inputs(day, fires, os.environ["FIRMS_MAP_KEY"], args.cache_dir, args.archive_dir)
+        saved, not_archived = archive_inputs(day, fires, os.environ["FIRMS_MAP_KEY"], args.cache_dir, args.archive_dir)
+        if not_archived:
+            problems.append(f"not archived: {', '.join(not_archived)}")
         log.info(f"Archived {len(saved)} input files for {day:%Y-%m-%d}")
         if database_url := os.environ.get("DATABASE_URL"):
             spread_store.save_archive(database_url, f"{day:%Y-%m-%d}", saved)
@@ -136,34 +185,35 @@ def main() -> None:
     shape_ = (PATCH_SIZE, PATCH_SIZE)
     # Any known fire counts, as training counted any of the season's perimeters
     buffered = fires.geometry.buffer(1000)
-    features, done = [], set()
-    for fire in fires.itertuples():
-        for xmin, ymax in fire_tiles(*buffered[fire.Index].bounds):
-            if (xmin, ymax) in done:
-                continue
-            done.add((xmin, ymax))
-            transform = from_bounds(xmin, ymax - PATCH_EXTENT_M, xmin + PATCH_EXTENT_M, ymax, *shape_)
-            known = rasterio.features.rasterize(
-                [(g, 1.0) for g in buffered.cx[xmin:xmin + PATCH_EXTENT_M, ymax - PATCH_EXTENT_M:ymax]],
-                out_shape=shape_, transform=transform, dtype=np.float32, fill=0.0,
-            )
-            masks = firms_daily_masks(detections, dates, transform, known)
-            if not (masks[-1] > masks[-3]).any():
-                continue  # no new detections on T or T-1: not actively burning here
-            X = assembler._build_patch_channels(f"{day:%Y-%m-%d}", masks[-1], transform, shape_, day.year)
-            x = torch.from_numpy(stats.normalize(X).astype(np.float32))[None]
-            with torch.no_grad():
-                prob = np.mean([torch.sigmoid(m(x))[0, 0].numpy() for m in models], axis=0)
-            band = spread_bands(prob, masks[-1])
-            for geom, level in rasterio.features.shapes(band, mask=band > 0, transform=transform):
-                features.append({"type": "Feature", "geometry": geom,
-                                 "properties": {"band": BANDS[int(level) - 1][0], "fire_number": fire.fire_number}})
-            log.info(f"  {fire.fire_number} {fire.fire_name}: {int((band > 0).sum())} km² flagged")
+
+    def predict_tile(fire, xmin: float, ymax: float) -> list[dict] | None:
+        transform = from_bounds(xmin, ymax - PATCH_EXTENT_M, xmin + PATCH_EXTENT_M, ymax, *shape_)
+        known = rasterio.features.rasterize(
+            [(g, 1.0) for g in buffered.cx[xmin:xmin + PATCH_EXTENT_M, ymax - PATCH_EXTENT_M:ymax]],
+            out_shape=shape_, transform=transform, dtype=np.float32, fill=0.0,
+        )
+        masks = firms_daily_masks(detections, dates, transform, known)
+        if not (masks[-1] > masks[-3]).any():
+            return None  # no new detections on T or T-1: not actively burning here
+        X = assembler._build_patch_channels(f"{day:%Y-%m-%d}", masks[-1], transform, shape_, day.year)
+        x = torch.from_numpy(stats.normalize(X).astype(np.float32))[None]
+        with torch.no_grad():
+            prob = np.mean([torch.sigmoid(m(x))[0, 0].numpy() for m in models], axis=0)
+        band = spread_bands(prob, masks[-1])
+        log.info(f"  {fire.fire_number} {fire.fire_name}: {int((band > 0).sum())} km² flagged")
+        return [{"type": "Feature", "geometry": geom,
+                 "properties": {"band": BANDS[int(level) - 1][0], "fire_number": fire.fire_number}}
+                for geom, level in rasterio.features.shapes(band, mask=band > 0, transform=transform)]
+
+    features, failed_fires = predict_fires(fires, buffered, predict_tile)
+    if failed_fires:
+        problems.append(f"no prediction for {', '.join(failed_fires)}")
 
     out = gpd.GeoDataFrame.from_features(features, crs=OUTPUT_CRS).to_crs("EPSG:4326") if features else None
     args.out.parent.mkdir(parents=True, exist_ok=True)
     collection = json.loads(out.to_json()) if out is not None else {"type": "FeatureCollection", "features": []}
-    collection.update(date=f"{day:%Y-%m-%d}", issued=datetime.now(timezone.utc).isoformat(timespec="minutes"))
+    collection.update(date=f"{day:%Y-%m-%d}", issued=datetime.now(timezone.utc).isoformat(timespec="minutes"),
+                      failed_fires=failed_fires)
     args.out.write_text(json.dumps(collection))
     prune_cache(args.cache_dir)
     if database_url := os.environ.get("DATABASE_URL"):
@@ -171,6 +221,7 @@ def main() -> None:
     else:
         log.warning("DATABASE_URL is not set: this run is only in the file")
     log.info(f"Wrote {len(collection['features'])} areas for {day:%Y-%m-%d} to {args.out}")
+    return problems
 
 
 if __name__ == "__main__":
