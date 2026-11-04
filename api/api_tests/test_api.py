@@ -313,7 +313,7 @@ def spread_db(monkeypatch):
     if not url:
         pytest.skip("TEST_DATABASE_URL is not set")
     with psycopg.connect(url) as conn:
-        conn.execute("TRUNCATE spread_run CASCADE")
+        conn.execute("TRUNCATE spread_run, input_archive CASCADE")
     monkeypatch.setenv("DATABASE_URL", url)
     return url
 
@@ -368,6 +368,17 @@ def test_spread_map_from_the_database_goes_stale_by_the_runs_date(client, spread
         conn.execute("TRUNCATE spread_run CASCADE")
     spread_store.save_run(spread_db, spread_collection(today - timedelta(days=4)))
     assert client.get("/api/v1/predict/spread-map").status_code == 503
+
+
+def test_archive_records_each_file_and_updates_a_rerun(spread_db, tmp_path):
+    path = tmp_path / "ecmwf.nc"
+    path.write_bytes(b"12345")
+    spread_store.save_archive(spread_db, "2026-08-14", {"ecmwf.nc": path})
+    path.write_bytes(b"1234567")
+    spread_store.save_archive(spread_db, "2026-08-14", {"ecmwf.nc": path})
+    with psycopg.connect(spread_db) as conn:
+        rows = conn.execute("SELECT source, path, bytes FROM input_archive").fetchall()
+    assert rows == [("ecmwf.nc", str(path), 7)]
 
 
 def test_spread_map_reports_an_unreachable_database(client, monkeypatch):

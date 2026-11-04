@@ -46,7 +46,7 @@ from shapely.geometry import shape
 from api.services import bc_fires, spread_store
 from src.data.assemble import OUTPUT_CRS, PATCH_EXTENT_M, fire_tiles, firms_daily_masks
 from src.data.dataset import ChannelStats
-from src.data.live import LiveAssembler, firms_detections
+from src.data.live import LiveAssembler, archive_inputs, firms_detections, prune_cache
 from src.models.unet import build_unet
 from src.utils.config import N_CHANNELS, PATCH_SIZE, TARGET_RESOLUTION_M
 
@@ -57,6 +57,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 BANDS = [("highest", 0.944), ("elevated", 0.539)]
 MAX_REACH_KM = 15       # 97% of next-day new burn in 2012–22 landed within this of the day-T burn
 MAX_HISTORY_DAYS = 120  # burn before this counts as nothing; long enough for any active fire
+ARCHIVE_WITHIN_DAYS = 4  # ECMWF's forecasts are gone after this, so a rerun of an older day is not worth keeping
 MODEL_DIR = Path("experiments/checkpoints/spread")  # the checkpoints and the stats they were trained with
 
 
@@ -69,6 +70,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stats", type=Path, default=MODEL_DIR / "channel_stats.json")
     p.add_argument("--cache-dir", type=Path, default=Path("data/live/cache"))
     p.add_argument("--out", type=Path, default=Path("data/live/spread.geojson"))
+    p.add_argument("--archive-dir", type=Path, default=Path("data/live/archive"))
     return p.parse_args()
 
 
@@ -111,6 +113,12 @@ def main() -> None:
 
     fires = known_fires(day.year)
     log.info(f"{len(fires)} BCWS fires not out")
+    # First, so a failure later in the run does not lose the day's inputs
+    if (yesterday - day).days <= ARCHIVE_WITHIN_DAYS:
+        saved = archive_inputs(day, fires, os.environ["FIRMS_MAP_KEY"], args.cache_dir, args.archive_dir)
+        log.info(f"Archived {len(saved)} input files for {day:%Y-%m-%d}")
+        if database_url := os.environ.get("DATABASE_URL"):
+            spread_store.save_archive(database_url, f"{day:%Y-%m-%d}", saved)
     start = day - pd.Timedelta(days=MAX_HISTORY_DAYS)
     detections = firms_detections(start, day, os.environ["FIRMS_MAP_KEY"], args.cache_dir)
     dates = list(pd.date_range(start, day))
@@ -157,6 +165,7 @@ def main() -> None:
     collection = json.loads(out.to_json()) if out is not None else {"type": "FeatureCollection", "features": []}
     collection.update(date=f"{day:%Y-%m-%d}", issued=datetime.now(timezone.utc).isoformat(timespec="minutes"))
     args.out.write_text(json.dumps(collection))
+    prune_cache(args.cache_dir)
     if database_url := os.environ.get("DATABASE_URL"):
         spread_store.save_run(database_url, collection)
     else:

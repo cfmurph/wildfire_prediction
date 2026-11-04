@@ -2,15 +2,20 @@
 
 import io
 import json
+import os
 import re
+import time
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
 import rasterio
 import rasterio.warp
+import xarray as xr
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds, from_origin
+from shapely.geometry import Point
 
 from api.services import bc_fires
 from scripts.predict_spread import BANDS, known_fires, main, spread_bands
@@ -33,14 +38,9 @@ def tif_bytes(value: float) -> bytes:
         return mem.read()
 
 
-@pytest.mark.parametrize("tp30, precip", [(0.012, 10.0), (0.001, 0.0)])
-def test_ecmwf_day_turns_three_hourly_fields_into_daily_ones(monkeypatch, tmp_path, tp30, precip):
-    def values(step):
-        return {"2t": 293.15, "2d": 283.15, "10u": step, "10v": -step, "mx2t3": 273.15 + step,
-                "mn2t3": 273.15 + step, "tp": tp30 if step == 30 else 0.002}
-
+def fake_ecmwf(monkeypatch, values, steps):
     blobs, index = {}, {}
-    for step in range(6, 31, 3):
+    for step in steps:
         url, blob, lines = live.ECMWF_URL.format(d="20260801", step=step), b"", []
         for param, value in {"msl": 1e5, **values(step)}.items():
             data = tif_bytes(value)
@@ -54,6 +54,15 @@ def test_ecmwf_day_turns_three_hourly_fields_into_daily_ones(monkeypatch, tmp_pa
 
     monkeypatch.setattr(live, "_get", lambda url: index[url])
     monkeypatch.setattr(live.urllib.request, "urlopen", urlopen)
+
+
+@pytest.mark.parametrize("tp30, precip", [(0.012, 10.0), (0.001, 0.0)])
+def test_ecmwf_day_turns_three_hourly_fields_into_daily_ones(monkeypatch, tmp_path, tp30, precip):
+    def values(step):
+        return {"2t": 293.15, "2d": 283.15, "10u": step, "10v": -step, "mx2t3": 273.15 + step,
+                "mn2t3": 273.15 + step, "tp": tp30 if step == 30 else 0.002}
+
+    fake_ecmwf(monkeypatch, values, range(6, 31, 3))
     day = live.ecmwf_day("2026-08-01", tmp_path)
 
     assert day["temp_max"].values[0, 0] == pytest.approx(30)
@@ -120,6 +129,89 @@ def test_firms_reports_an_error_body_instead_of_parsing_it(monkeypatch, tmp_path
     fake_firms(monkeypatch, lambda url: "Invalid MAP_KEY.")
     with pytest.raises(RuntimeError, match="Invalid MAP_KEY"):
         live.firms_detections(pd.Timestamp("2026-08-01"), pd.Timestamp("2026-08-02"), "KEY", tmp_path)
+
+
+def ecmwf_values(step):
+    return {"2t": 293.15, "2d": 283.15, "10u": step, "10v": -step, "mx2t3": 300, "mn2t3": 280, "tp": 0.001 * step}
+
+
+def test_ecmwf_archive_keeps_every_step_out_to_the_day_predicted(monkeypatch, tmp_path):
+    fake_ecmwf(monkeypatch, ecmwf_values, live.ECMWF_ARCHIVE_STEPS)
+    ds = live.ecmwf_archive("2026-08-01", tmp_path)
+    assert list(ds.step.values) == list(range(6, 55, 3))
+    assert set(ds.data_vars) == set(live.ECMWF_PARAMS)
+    assert ds["10u"].sel(step=54).values[0, 0] == pytest.approx(54)
+    assert ds["tp"].sel(step=30).values[0, 0] == pytest.approx(0.03)
+
+
+def test_ecmwf_archive_crops_to_bc():
+    lats = np.arange(90, -90, -0.25)
+    lons = np.arange(-180, 180, 0.25)
+    ds = xr.Dataset(coords={"latitude": lats, "longitude": lons}).sel(
+        latitude=live.BC_LATITUDES, longitude=live.BC_LONGITUDES)
+    assert ds.latitude.max() == 61 and ds.latitude.min() == 47
+    assert ds.longitude.min() == -141 and ds.longitude.max() == -113
+
+
+def archive_fixtures(monkeypatch, tmp_path, fail=()):
+    fake_ecmwf(monkeypatch, ecmwf_values, live.ECMWF_ARCHIVE_STEPS)
+    real_get = live._get
+
+    def get(url):
+        if "firms" in url:
+            if "firms" in fail:
+                raise OSError("FIRMS is down")
+            if "data_availability" in url:
+                return (b"data_id,min_date,max_date\n"
+                        + b"".join(f"{s}_SP,2018-04-01,2026-07-31\n".encode() for s in live.FIRMS_SATELLITES))
+            return f"{NRT_HEADER}\n{firms_row('2026-08-01')}\n".encode()
+        return real_get(url)
+
+    monkeypatch.setattr(live, "_get", get)
+    for var in live.FWI_VARS:
+        (tmp_path / f"cwfis_{var.lower()}_2026-08-01.tif").write_bytes(tif_bytes(20))
+    return gpd.GeoDataFrame({"fire_number": ["G1"]}, geometry=[Point(1_200_000, 1_000_000)], crs=OUTPUT_CRS)
+
+
+def test_archive_inputs_keeps_each_source_readable(monkeypatch, tmp_path):
+    fires = archive_fixtures(monkeypatch, tmp_path)
+    saved = live.archive_inputs(pd.Timestamp("2026-08-01"), fires, "KEY", tmp_path, tmp_path / "archive")
+
+    assert set(saved) == {"ecmwf.nc", "firms.csv.gz", "fires.geojson",
+                          *(f"cwfis_{v.lower()}.tif" for v in live.FWI_VARS)}
+    assert saved["ecmwf.nc"].parent == tmp_path / "archive" / "2026-08-01"
+    with xr.open_dataset(saved["ecmwf.nc"]) as ds:
+        assert ds["10u"].sel(step=54).values[0, 0] == pytest.approx(54)
+    with rasterio.open(saved["cwfis_isi.tif"]) as src:
+        assert src.compression.name == "deflate"
+        assert np.allclose(src.read(1), 20)
+    assert list(pd.read_csv(saved["firms.csv.gz"])["acq_date"].unique()) == ["2026-08-01"]
+    feature = json.loads(saved["fires.geojson"].read_text())["features"][0]
+    assert feature["properties"]["fire_number"] == "G1"
+    assert -140 < feature["geometry"]["coordinates"][0] < -113  # lon/lat
+
+
+def test_a_failing_source_costs_only_itself_and_keeps_an_earlier_file(monkeypatch, tmp_path):
+    fires = archive_fixtures(monkeypatch, tmp_path, fail=("firms",))
+    out = tmp_path / "archive" / "2026-08-01"
+    out.mkdir(parents=True)
+    (out / "firms.csv.gz").write_bytes(b"from the first run")
+    saved = live.archive_inputs(pd.Timestamp("2026-08-01"), fires, "KEY", tmp_path, tmp_path / "archive")
+
+    assert "firms.csv.gz" not in saved
+    assert "ecmwf.nc" in saved and "fires.geojson" in saved
+    assert (out / "firms.csv.gz").read_bytes() == b"from the first run"
+    assert not list(out.glob("tmp_*"))
+
+
+def test_prune_cache_removes_only_old_downloads(tmp_path):
+    old = time.time() - (live.CACHE_KEEP_DAYS + 1) * 24 * 3600
+    for name, mtime in [("ecmwf_old.grib2", old), ("cwfis_old.tif", old), ("firms_old.csv", old),
+                        ("ecmwf_new.grib2", time.time())]:
+        (tmp_path / name).touch()
+        os.utime(tmp_path / name, (mtime, mtime))
+    live.prune_cache(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["ecmwf_new.grib2", "firms_old.csv"]
 
 
 def assembler(tmp_path):

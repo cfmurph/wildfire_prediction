@@ -14,3 +14,13 @@ CREATE TABLE IF NOT EXISTS spread_area (
   geom geometry(Geometry, 4326) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS spread_area_date ON spread_area (date);
+
+-- What the daily run kept of its inputs; the files themselves are in data/live/archive
+CREATE TABLE IF NOT EXISTS input_archive (
+  date date NOT NULL,
+  source text NOT NULL,
+  path text NOT NULL,
+  bytes bigint NOT NULL,
+  archived_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (date, source)
+);
