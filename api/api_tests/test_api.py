@@ -313,7 +313,7 @@ def spread_db(monkeypatch):
     if not url:
         pytest.skip("TEST_DATABASE_URL is not set")
     with psycopg.connect(url) as conn:
-        conn.execute("TRUNCATE spread_run, input_archive CASCADE")
+        conn.execute("TRUNCATE spread_run, input_archive, spread_score CASCADE")
     monkeypatch.setenv("DATABASE_URL", url)
     return url
 
@@ -385,6 +385,48 @@ def test_archive_records_each_file_and_updates_a_rerun(spread_db, tmp_path):
     with psycopg.connect(spread_db) as conn:
         rows = conn.execute("SELECT source, path, bytes FROM input_archive").fetchall()
     assert rows == [("ecmwf.nc", str(path), 7)]
+
+
+def spread_score_row(number="G1", new_burn=10, highest=5, elevated=20, hit_highest=4, hit_elevated=3):
+    return {"fire_number": number, "unburned_km2": 100, "new_burn_km2": new_burn, "flagged_highest_km2": highest,
+            "flagged_elevated_km2": elevated, "hit_highest_km2": hit_highest, "hit_elevated_km2": hit_elevated}
+
+
+def test_unscored_runs_lists_only_unscored_days_in_range(spread_db):
+    for day in ("2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"):
+        spread_store.save_run(spread_db, spread_collection(day))
+    spread_store.save_scores(spread_db, "2026-08-11", [])
+    assert spread_store.unscored_runs(spread_db, "2026-08-11", "2026-08-13") == ["2026-08-12"]
+
+
+def test_scores_add_up_by_day_and_rerunning_a_prediction_clears_them(spread_db):
+    spread_store.save_run(spread_db, spread_collection("2026-08-10"))
+    spread_store.save_scores(spread_db, "2026-08-10", [spread_score_row("G1"), spread_score_row("G2")])
+    with psycopg.connect(spread_db) as conn:
+        row = conn.execute(
+            "SELECT fires, new_burn_km2, caught_highest_pct, caught_both_pct, land_highest_pct, land_both_pct "
+            "FROM spread_score_daily"
+        ).fetchone()
+    assert [float(value) for value in row] == [2, 20, 40.0, 70.0, 5.0, 25.0]
+
+    spread_store.save_run(spread_db, spread_collection("2026-08-10"))
+    assert spread_store.unscored_runs(spread_db, "2026-08-10", "2026-08-11") == ["2026-08-10"]
+    with psycopg.connect(spread_db) as conn:
+        assert conn.execute("SELECT count(*) FROM spread_score").fetchone() == (0,)
+
+
+def test_a_day_with_no_new_burn_scores_without_dividing_by_zero(spread_db):
+    spread_store.save_run(spread_db, spread_collection("2026-08-10"))
+    spread_store.save_scores(spread_db, "2026-08-10", [spread_score_row(new_burn=0, hit_highest=0, hit_elevated=0)])
+    with psycopg.connect(spread_db) as conn:
+        assert conn.execute("SELECT caught_highest_pct FROM spread_score_daily").fetchone() == (None,)
+
+
+def test_run_features_returns_a_days_areas(spread_db):
+    spread_store.save_run(spread_db, spread_collection("2026-08-10"))
+    features = spread_store.run_features(spread_db, "2026-08-10")
+    assert features[0]["properties"] == {"band": "highest", "fire_number": "G1"}
+    assert features[0]["geometry"]["type"] == "Polygon"
 
 
 def test_spread_map_reports_an_unreachable_database(client, monkeypatch):

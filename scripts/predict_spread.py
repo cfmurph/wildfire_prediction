@@ -60,6 +60,7 @@ BANDS = [("highest", 0.944), ("elevated", 0.539)]
 MAX_REACH_KM = 15       # 97% of next-day new burn in 2012–22 landed within this of the day-T burn
 MAX_HISTORY_DAYS = 120  # burn before this counts as nothing; long enough for any active fire
 ARCHIVE_WITHIN_DAYS = 4  # ECMWF's forecasts are gone after this, so a rerun of an older day is not worth keeping
+MAX_SCORE_LAG_DAYS = 7  # a day still unscored after this is left, rather than reported every morning
 MODEL_DIR = Path("experiments/checkpoints/spread")  # the checkpoints and the stats they were trained with
 
 
@@ -129,6 +130,63 @@ def predict_fires(fires, buffered, predict_tile) -> tuple[list[dict], list[str]]
     return features, sorted(set(failed))
 
 
+def tile_masks(xmin: float, ymax: float, buffered, detections, dates) -> tuple:
+    """A tile's transform and its daily burn masks, counting detections that connect to a known fire."""
+    transform = from_bounds(xmin, ymax - PATCH_EXTENT_M, xmin + PATCH_EXTENT_M, ymax, PATCH_SIZE, PATCH_SIZE)
+    known = rasterio.features.rasterize(
+        [(g, 1.0) for g in buffered.cx[xmin:xmin + PATCH_EXTENT_M, ymax - PATCH_EXTENT_M:ymax]],
+        out_shape=(PATCH_SIZE, PATCH_SIZE), transform=transform, dtype=np.float32, fill=0.0,
+    )
+    return transform, firms_daily_masks(detections, dates, transform, known)
+
+
+def tile_score(fire_number: str, band: np.ndarray, burned: np.ndarray, new_burn: np.ndarray) -> dict:
+    """How a tile's bands (1 highest, 2 elevated) did against the next day's new burn, in km² (1 km pixels)."""
+    return {
+        "fire_number": fire_number,
+        "unburned_km2": int((burned == 0).sum()),
+        "new_burn_km2": int(new_burn.sum()),
+        "flagged_highest_km2": int((band == 1).sum()),
+        "flagged_elevated_km2": int((band == 2).sum()),
+        "hit_highest_km2": int(((band == 1) & new_burn).sum()),
+        "hit_elevated_km2": int(((band == 2) & new_burn).sum()),
+    }
+
+
+def score_run(database_url: str, date_str: str, detections, dates: list, archive_dir: Path) -> list[str]:
+    """
+    Score a day's prediction against the next day's detections, by the fires listed that day, so
+    tiles match the prediction's even if a fire has since left the list. Returns fires that failed.
+    """
+    fires = gpd.read_file(archive_dir / date_str / "fires.geojson").to_crs(OUTPUT_CRS)
+    buffered = fires.geometry.buffer(1000)
+    features = spread_store.run_features(database_url, date_str)
+    areas = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326").to_crs(OUTPUT_CRS) if features else None
+    through_next_day = dates[:dates.index(pd.Timestamp(date_str) + pd.Timedelta(days=1)) + 1]
+
+    def score_tile(fire, xmin: float, ymax: float) -> list[dict] | None:
+        transform, masks = tile_masks(xmin, ymax, buffered, detections, through_next_day)
+        new_burn = (masks[-1] > 0) & (masks[-2] == 0)
+        band = np.zeros(new_burn.shape, dtype=np.uint8)
+        if areas is not None:
+            in_tile = areas.cx[xmin:xmin + PATCH_EXTENT_M, ymax - PATCH_EXTENT_M:ymax]
+            shapes = [(g, level) for level, (name, _) in enumerate(BANDS, start=1)
+                      for g in in_tile.geometry[in_tile["band"] == name]]
+            if shapes:
+                band = rasterio.features.rasterize(shapes, out_shape=band.shape, transform=transform, dtype=np.uint8)
+        if not (band.any() or new_burn.any()):
+            return None
+        return [tile_score(fire.fire_number, band, masks[-2], new_burn)]
+
+    rows, failed = predict_fires(fires, buffered, score_tile)
+    # A fire wider than one tile has several rows
+    scores = pd.DataFrame(rows).groupby("fire_number", as_index=False).sum().to_dict("records") if rows else []
+    spread_store.save_scores(database_url, date_str, scores)
+    log.info(f"Scored {date_str}: {sum(s['new_burn_km2'] for s in scores)} km² of new burn, "
+             f"{sum(s['hit_highest_km2'] + s['hit_elevated_km2'] for s in scores)} km² of it flagged")
+    return failed
+
+
 def notify(message: str) -> None:
     """A macOS notification, since nobody reads the job's log until something looks wrong."""
     if sys.platform == "darwin":
@@ -187,12 +245,7 @@ def run(args: argparse.Namespace) -> list[str]:
     buffered = fires.geometry.buffer(1000)
 
     def predict_tile(fire, xmin: float, ymax: float) -> list[dict] | None:
-        transform = from_bounds(xmin, ymax - PATCH_EXTENT_M, xmin + PATCH_EXTENT_M, ymax, *shape_)
-        known = rasterio.features.rasterize(
-            [(g, 1.0) for g in buffered.cx[xmin:xmin + PATCH_EXTENT_M, ymax - PATCH_EXTENT_M:ymax]],
-            out_shape=shape_, transform=transform, dtype=np.float32, fill=0.0,
-        )
-        masks = firms_daily_masks(detections, dates, transform, known)
+        transform, masks = tile_masks(xmin, ymax, buffered, detections, dates)
         if not (masks[-1] > masks[-3]).any():
             return None  # no new detections on T or T-1: not actively burning here
         X = assembler._build_patch_channels(f"{day:%Y-%m-%d}", masks[-1], transform, shape_, day.year)
@@ -218,6 +271,14 @@ def run(args: argparse.Namespace) -> list[str]:
     prune_cache(args.cache_dir)
     if database_url := os.environ.get("DATABASE_URL"):
         spread_store.save_run(database_url, collection)
+        since = f"{day - pd.Timedelta(days=MAX_SCORE_LAG_DAYS):%Y-%m-%d}"
+        for date_str in spread_store.unscored_runs(database_url, since, f"{day:%Y-%m-%d}"):
+            try:
+                if not_scored := score_run(database_url, date_str, detections, dates, args.archive_dir):
+                    problems.append(f"{date_str} not scored for {', '.join(not_scored)}")
+            except Exception:
+                log.exception(f"Could not score {date_str}")
+                problems.append(f"{date_str} not scored")
     else:
         log.warning("DATABASE_URL is not set: this run is only in the file")
     log.info(f"Wrote {len(collection['features'])} areas for {day:%Y-%m-%d} to {args.out}")

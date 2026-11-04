@@ -19,9 +19,9 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds, from_origin
 from shapely.geometry import Point
 
-from api.services import bc_fires
+from api.services import bc_fires, spread_store
 from scripts import predict_spread
-from scripts.predict_spread import BANDS, known_fires, main, predict_fires, spread_bands
+from scripts.predict_spread import BANDS, known_fires, main, predict_fires, score_run, spread_bands, tile_score
 from src.data import live
 from src.data.assemble import OUTPUT_CRS, PATCH_EXTENT_M
 from src.utils.config import TARGET_RESOLUTION_M
@@ -368,6 +368,69 @@ def test_every_burning_tile_failing_stops_the_run():
 
     with pytest.raises(RuntimeError, match="G0"):
         predict_fires(fires, buffered, predict_tile)
+
+
+def test_tile_score_counts_each_band_and_what_it_caught():
+    band = np.array([[1, 1, 2], [2, 0, 0]])
+    burned = np.array([[0, 0, 0], [0, 0, 1]])
+    new_burn = np.array([[True, False, True], [False, True, False]])
+    assert tile_score("G1", band, burned, new_burn) == {
+        "fire_number": "G1", "unburned_km2": 5, "new_burn_km2": 3, "flagged_highest_km2": 2,
+        "flagged_elevated_km2": 2, "hit_highest_km2": 1, "hit_elevated_km2": 1,
+    }
+
+
+def scored_fixture(monkeypatch, tmp_path, features):
+    """One fire, burned on the day and growing 2 pixels east the next; pixels start at the fire. Returns the scores."""
+    x, y = 1_200_500, 1_000_500
+    gpd.GeoDataFrame({"fire_number": ["G1"], "fire_name": [""]}, geometry=[Point(x, y)], crs=OUTPUT_CRS).to_crs(
+        "EPSG:4326").to_file(archive_path(tmp_path), driver="GeoJSON")
+    saved = {}
+    monkeypatch.setattr(spread_store, "run_features", lambda url, day: features(x, y))
+    monkeypatch.setattr(spread_store, "save_scores", lambda url, day, scores: saved.update(day=day, scores=scores))
+    detections = pd.DataFrame({
+        "x": [x + 500, x + 1500, x + 2500, x + 9500],
+        "y": [y + 500] * 4,
+        "date": pd.to_datetime(["2026-08-01", "2026-08-02", "2026-08-02", "2026-08-03"]),
+    })
+    dates = list(pd.date_range("2026-07-30", "2026-08-03"))
+    failed = score_run("url", "2026-08-01", detections, dates, tmp_path)
+    assert failed == []
+    return saved
+
+
+def archive_path(tmp_path):
+    path = tmp_path / "2026-08-01" / "fires.geojson"
+    path.parent.mkdir(parents=True)
+    return path
+
+
+def area_feature(x, y, band):
+    """The polygon of the 1 km pixel holding x, y, in lon/lat as stored."""
+    xs, ys = [x - 400, x + 400, x + 400, x - 400, x - 400], [y - 400, y - 400, y + 400, y + 400, y - 400]
+    lons, lats = rasterio.warp.transform(OUTPUT_CRS, "EPSG:4326", xs, ys)
+    return {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [list(map(list, zip(lons, lats)))]},
+            "properties": {"band": band, "fire_number": "G1"}}
+
+
+def test_score_run_counts_next_day_growth_inside_and_outside_the_bands(monkeypatch, tmp_path):
+    saved = scored_fixture(monkeypatch, tmp_path, lambda x, y: [area_feature(x + 1500, y + 500, "highest"),
+                                                                area_feature(x + 3500, y + 500, "elevated")])
+    score = saved["scores"][0]
+    assert saved["day"] == "2026-08-01"
+    assert score["fire_number"] == "G1"
+    assert score["new_burn_km2"] == 2  # later growth, on 3 Aug, is another day's
+    assert score["flagged_highest_km2"] == 1
+    assert score["flagged_elevated_km2"] == 1
+    assert score["hit_highest_km2"] == 1
+    assert score["hit_elevated_km2"] == 0
+
+
+def test_score_run_counts_growth_on_a_day_with_nothing_flagged_as_missed(monkeypatch, tmp_path):
+    saved = scored_fixture(monkeypatch, tmp_path, lambda x, y: [])
+    score = saved["scores"][0]
+    assert score["new_burn_km2"] == 2
+    assert score["hit_highest_km2"] + score["hit_elevated_km2"] == 0
 
 
 class FakeResponse(io.BytesIO):

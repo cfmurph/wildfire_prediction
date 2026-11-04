@@ -151,6 +151,8 @@ Each run also keeps the day's inputs in `data/live/archive/<date>/`, listed in t
 
 A failed run, or one that could not predict a fire or archive a source, sends a macOS notification; a fire that failed is listed in `spread_run.failed_fires`. If no burning tile can be predicted the run stops and leaves the last result in place. A job that never starts, because the Mac was off, sends nothing.
 
+Each morning also scores the previous prediction against that day's new detections, by fire in `spread_score` and by day in the `spread_score_daily` view. It needs the day's prediction and archived fire list, and catches up on days up to a week back. Detections are a lower bound on what burned, because cloud and smoke hide fire, and a day's score is noisy: judge the model over many days.
+
 Browse it with pgAdmin: host `localhost`, port `5432`, database `wildfire`, your Mac username.
 
 With `DATABASE_URL` set the API reads the database and stops serving a run three days after its date, so a stopped job clears the map layer. Without it the API serves the file, up to two days old: when running the Docker image, mount the output with `-v "$PWD/data/live:/app/data/live"`.
