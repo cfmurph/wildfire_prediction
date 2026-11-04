@@ -46,6 +46,7 @@ from scipy.ndimage import distance_transform_edt
 from shapely.geometry import shape
 
 from api.services import bc_fires, spread_store
+from scripts.backup import backup
 from src.data.assemble import OUTPUT_CRS, PATCH_EXTENT_M, fire_tiles, firms_daily_masks
 from src.data.dataset import ChannelStats
 from src.data.live import LiveAssembler, archive_inputs, firms_detections, prune_cache
@@ -282,6 +283,14 @@ def run(args: argparse.Namespace) -> list[str]:
     else:
         log.warning("DATABASE_URL is not set: this run is only in the file")
     log.info(f"Wrote {len(collection['features'])} areas for {day:%Y-%m-%d} to {args.out}")
+    if os.environ.get("BACKUP_DIR") and os.environ.get("DATABASE_URL"):
+        try:
+            backup(Path(os.environ["BACKUP_DIR"]).expanduser(), os.environ["DATABASE_URL"])
+        except Exception:
+            log.exception("Backup failed")
+            problems.append("backup failed")
+    else:
+        log.warning("BACKUP_DIR is not set: nothing was backed up")
     return problems
 
 
