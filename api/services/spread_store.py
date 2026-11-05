@@ -50,6 +50,40 @@ def save_archive(database_url: str, date_str: str, files: dict[str, Path]) -> No
         )
 
 
+def unscored_runs(database_url: str, since: str, before: str) -> list[str]:
+    """The days predicted in a range that have no score yet, oldest first."""
+    with psycopg.connect(database_url) as conn:
+        rows = conn.execute(
+            "SELECT date::text FROM spread_run WHERE date >= %s AND date < %s AND scored_at IS NULL ORDER BY date",
+            (since, before),
+        ).fetchall()
+    return [day for day, in rows]
+
+
+def run_features(database_url: str, date_str: str) -> list[dict]:
+    """A day's flagged areas as GeoJSON features."""
+    with psycopg.connect(database_url) as conn:
+        rows = conn.execute(
+            "SELECT ST_AsGeoJSON(geom)::json, band, fire_number FROM spread_area WHERE date = %s", (date_str,)
+        ).fetchall()
+    return [{"type": "Feature", "geometry": geom, "properties": {"band": band, "fire_number": number}}
+            for geom, band, number in rows]
+
+
+def save_scores(database_url: str, date_str: str, scores: list[dict]) -> None:
+    """Store a day's scores by fire and mark it scored, all or nothing."""
+    with psycopg.connect(database_url) as conn:
+        conn.execute("DELETE FROM spread_score WHERE date = %s", (date_str,))
+        conn.cursor().executemany(
+            "INSERT INTO spread_score (date, fire_number, unburned_km2, new_burn_km2, flagged_highest_km2, "
+            "flagged_elevated_km2, hit_highest_km2, hit_elevated_km2) VALUES (%(date)s, %(fire_number)s, "
+            "%(unburned_km2)s, %(new_burn_km2)s, %(flagged_highest_km2)s, %(flagged_elevated_km2)s, "
+            "%(hit_highest_km2)s, %(hit_elevated_km2)s)",
+            [score | {"date": date_str} for score in scores],
+        )
+        conn.execute("UPDATE spread_run SET scored_at = now() WHERE date = %s", (date_str,))
+
+
 def latest_run(database_url: str) -> tuple[date, str] | None:
     """The newest day predicted and its GeoJSON text, or None before the first run."""
     with psycopg.connect(database_url) as conn:
